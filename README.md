@@ -40,6 +40,14 @@
 | --- |
 | ![单链统计](docs/screenshots/stats-hours.png) |
 
+| 本期要点（概览顶部） | 热点榜（最近 24 小时） |
+| --- | --- |
+| ![本期要点](docs/screenshots/digest.png) | ![热点榜](docs/screenshots/hot.png) |
+
+| 热度筛选（短链列表） | 单链统计（曝光 / 落点率） |
+| --- | --- |
+| ![热度筛选](docs/screenshots/links-heat.png) | ![单链统计](docs/screenshots/link-stats-views.png) |
+
 | 审计日志 | 系统设置 |
 | --- | --- |
 | ![审计日志](docs/screenshots/audit.png) | ![设置](docs/screenshots/settings.png) |
@@ -107,6 +115,10 @@
 | 分组活跃时段（一格一张卡片） | 短链名片 |
 | --- | --- |
 | ![移动端分组活跃时段](docs/screenshots/mobile-groups-hours.png) | ![移动端短链名片](docs/screenshots/mobile-link-preview.png) |
+
+| 热点榜（窄屏折行，不为「多久之前」挤掉标题） | 本期要点（数值换行到第二行） |
+| --- | --- |
+| ![移动端热点榜](docs/screenshots/mobile-hot.png) | ![移动端本期要点](docs/screenshots/mobile-digest.png) |
 
 跳转前建页：目标域名是这页唯一的主角，按钮只有「继续访问」。
 
@@ -178,6 +190,9 @@
 | 按地域跳转 | 目标可绑定地区码（`CN`、`JP,HK,TW`），地区命中的优先，其余走全球目标；地区来自反向代理写入的 `CF-IPCountry` / `X-Country-Code` |
 | 来源分析 | 独立页面看近 30 天 referrer 站点 Top 30、访问平台分布、访客地区分布、直接访问占比，可导出 CSV |
 | 访问时段 | 星期 × 小时的热力图，一眼看出哪几天哪个时段流量最密；概览、来源页、单链统计、分组页都有，最忙的那一格直接写成文字 |
+| 本期要点 | 概览顶部一段话把「跟昨天比怎么样、哪几件事等人处理」列出来，每条点进去就是对应页面；只报变化和异常，点击太少时不判涨跌 |
+| 热点榜 | 最近 24 小时新增点击最多的短链，带窗口内曝光与实际落点，同时给条数和相对比例；累计榜看不出「现在什么在被点」，这里看的是增量 |
+| 热度筛选 | 短链列表可按「热门 / 有热度」筛，按全库最高点击数的比例分档而不是绝对值；排序里多了「最近 24 小时热度」 |
 | 分组统计 | 分组页看每组近 14 天每日点击的迷你柱状图，一眼知道哪块流量在跑 |
 | 分组活跃时段 | 分组页再往下，每个分组一张 7×24 热力图并按分组色着色：哪个项目的人在工作日上午来、哪个活动是周末夜里起量，不用自己对着两张图算 |
 | 实时访问 | 概览页滚动显示最近访问的短码、来源、平台、脱敏 IP，SSE 推送；连不上自动退回轮询 |
@@ -297,6 +312,19 @@ curl -X DELETE -H "Authorization: Bearer $TOKEN" https://s.example.com/api/v1/li
 # 统计
 curl -H "Authorization: Bearer $TOKEN" https://s.example.com/api/v1/links/mylink/stats?days=30
 curl -H "Authorization: Bearer $TOKEN" https://s.example.com/api/v1/stats
+```
+
+管理台侧的运营视图（会话鉴权）：
+
+```bash
+# 本期要点：窗口只接受整天，48 表示「近两天对比前两天」
+curl -b 'highurl_session=...' https://s.example.com/admin/api/digest?hours=48
+
+# 热点榜：最近 N 小时新增点击最多的短链，带窗口内曝光
+curl -b 'highurl_session=...' https://s.example.com/admin/api/hot?hours=24&limit=8
+
+# 列表按热度筛 / 按最近热度排
+curl -b 'highurl_session=...' 'https://s.example.com/admin/api/links?heat=hot&sort=recent_desc'
 ```
 
 短链对象里带健康字段：`health`（`ok` / `warn` / `dead` / 空串表示没测过）、`health_code`、`health_at`、`health_error`。

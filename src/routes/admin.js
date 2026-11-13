@@ -21,8 +21,26 @@ import { normalizeTags } from '../services/links.js';
 import { serializeTarget } from '../services/targets.js';
 import { funnelRows, funnelSummary } from '../services/funnel.js';
 import { maskIp } from '../services/stream.js';
+import { buildDigest } from '../services/insights.js';
 import { inspectBackup, restoreBackup } from '../services/restore.js';
 import { buildBackup, listBackups, backupPath, verifyBackup, KEEP_AUTO_BACKUPS } from '../services/backup.js';
+
+/**
+ * 热点榜的字段名统一成 camelCase 再出门。
+ * 直接吐 SQL 列名会让前端在 `clicks`（窗口内）和 `total_clicks`（累计）之间反复搞混，
+ * 而这两个数在界面上并排出现，混一次就是一条错结论。
+ */
+function serializeHot(rows) {
+  return rows.map((r) => ({
+    code: r.code,
+    title: r.title,
+    group: r.group_id ? { id: r.group_id, name: r.group_name || '' } : null,
+    windowClicks: r.window_clicks,
+    windowViews: r.window_views,
+    totalClicks: r.total_clicks,
+    lastClickAt: r.last_click_at,
+  }));
+}
 
 export function registerAdminRoutes(router, ctx) {
   const { store, settings, auth, links, cache, logger, counter } = ctx;
@@ -133,8 +151,33 @@ export function registerAdminRoutes(router, ctx) {
           trashed: store.sql.countDeleted.get().n,
           health: ctx.health?.summary?.() || null,
           visits: ctx.stream?.recent(12) || [],
+          hot: serializeHot(store.hotLinks({ hours: 24, limit: 6 }).rows),
+          digest: buildDigest(store, { hours: 24 }),
         },
       };
+    }),
+  );
+
+  /**
+   * 运营日报：概览顶部那一条。窗口可调，但只接受小时数——
+   * 底层统计都是天粒度，给「最近 3 天半」这种窗口也只会被悄悄取整。
+   */
+  router.get('/admin/api/digest', (req, res) =>
+    api(req, res, () => {
+      const q = new URL(req.url, 'http://x').searchParams;
+      const hours = Number(q.get('hours')) || 24;
+      return { result: buildDigest(store, { hours }) };
+    }),
+  );
+
+  /** 热点短链：最近 N 小时新增点击最多的一批，带窗口内曝光 */
+  router.get('/admin/api/hot', (req, res) =>
+    api(req, res, () => {
+      const q = new URL(req.url, 'http://x').searchParams;
+      const hours = Number(q.get('hours')) || 24;
+      const limit = Math.min(50, Math.max(1, Number(q.get('limit')) || 8));
+      const out = store.hotLinks({ hours, limit });
+      return { result: { ...out, rows: serializeHot(out.rows) } };
     }),
   );
 
@@ -149,7 +192,9 @@ export function registerAdminRoutes(router, ctx) {
         tag: q.get('tag') || '',
         group: q.get('group') || '',
         health: q.get('health') || '',
+        heat: q.get('heat') || '',
         sort: q.get('sort') || 'created_desc',
+        sinceDay: dateKey(new Date(Date.now() - 86400000)),
         page,
         perPage,
       });
@@ -566,7 +611,17 @@ export function registerAdminRoutes(router, ctx) {
       const stats = overviewStats(store, days);
       // 总数用 links.clicks：refs 只统计上报了 referrer 的点击
       const totalClicks = store.sql.sumClicks.get().n;
-      const refs = store.sql.globalRefs.all(30);
+      // 空 host 是「浏览器没上报 referrer」的直接访问，单独给一个数。
+      // 它混在站点榜里既没法点也没法比，而往往又是最大的一块
+      const allRefs = store.sql.globalRefs.all(30);
+      // 空 host 是直接访问，会排进榜单里；这里按每一行自己的意思拆开，
+      // 而不是去读全局最高的那一行——两者在多站点时分母不同，硬减会算出负数
+      const refs = [];
+      let direct = 0;
+      for (const row of allRefs) {
+        if (row.host) refs.push(row);
+        else direct = Number(row.clicks) || 0;
+      }
       const agents = store.sql.globalAgents.all(12);
       const countries = store.sql.globalCountries.all(20);
       const attributed = refs.reduce((s, r) => s + r.clicks, 0);
@@ -578,6 +633,7 @@ export function registerAdminRoutes(router, ctx) {
           agents,
           countries,
           known: attributed,
+          direct,
           unknown: Math.max(0, totalClicks - attributed),
           totalClicks,
           hours: store.hourMatrix(store.sql.globalSlots.all()),

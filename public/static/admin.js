@@ -4,7 +4,7 @@
 const state = {
   me: null,
   view: 'dashboard',
-  links: { page: 1, q: '', status: '', sort: 'created_desc', tag: '', group: '', health: '' },
+  links: { page: 1, q: '', status: '', sort: 'created_desc', tag: '', group: '', health: '', heat: '' },
   audit: { page: 1, filter: '' },
   trash: { page: 1 },
 };
@@ -36,6 +36,9 @@ const ICONS = {
   refresh: 'M20 11a8 8 0 1 0-2.6 6M20 5v6h-6',
   split: 'M6 4v5a4 4 0 0 0 4 4h4M18 4v5a4 4 0 0 1-4 4M12 13v7M9 17l3 3 3-3',
   history: 'M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4M12 8v4l3 2',
+  trend: 'M4 17l5-6 3.5 3L20 6M20 6h-4.5M20 6v4.5',
+  alert: 'M12 4l8 15H4zM12 10v4M12 16.5v.5',
+  info: 'M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM12 11v5M12 8v.5',
 };
 
 function ic(name, size = 15) {
@@ -325,6 +328,70 @@ function mountLiveFeed(initial = []) {
   });
 }
 
+/**
+ * 运营日报：概览顶部那一条。
+ *
+ * 只报变化和需要动手的事，不给「一切正常」的漂亮话——用户打开管理台是来
+ * 找问题的，不是来被安慰的。空数组时整块不渲染，概览不会凭空多出一个空框。
+ */
+function digestBlock(d) {
+  if (!d || !d.items.length) return '';
+  const cls = d.level === 'warn' ? 'warn' : '';
+  // 两类结论在视觉上要分开：「涨了/持平」是信息，「有人投诉、有死链」是该现在动手的
+  const info = d.items.filter((i) => i.kind !== 'warn');
+  const todo = d.items.filter((i) => i.kind === 'warn');
+  const row = (i) => {
+    const icoName = i.kind === 'warn' ? 'alert' : i.kind === 'up' || i.kind === 'down' ? 'trend' : 'info';
+    return `<a class="digest-item k-${esc(i.kind)}" href="${esc(i.link || '#/dashboard')}">
+        <span class="digest-ico">${ic(icoName, 14)}</span>
+        <span class="digest-text">${esc(i.text)}</span>
+        ${i.value ? `<b class="digest-val mono">${esc(i.value)}</b>` : ''}
+      </a>`;
+  };
+  const todoTitle = todo.length ? `<p class="digest-sub">待处理 ${todo.length} 项</p>${todo.map(row).join('')}` : '';
+  return `<section class="card digest ${cls}">
+    <div class="card-head"><h2>本期要点</h2><span class="tag">${esc(digestSpan(d.hours))} · 点任意一条进入对应页面</span></div>
+    <div class="card-body digest-list">${info.map(row).join('')}${todoTitle}</div>
+  </section>`;
+}
+
+function digestSpan(hours) {
+  const days = Math.round(hours / 24);
+  if (days <= 1) return '今天对比昨天';
+  return `近 ${days} 天对比前 ${days} 天`;
+}
+
+/**
+ * 热点榜：最近 24 小时新增点击最多的几条，带窗口内曝光。
+ *
+ * 用「窗口新增」而不是累计点击数：累计榜永远是那几条老的，
+ * 而这条榜单要回答的是「现在什么在被点」。曝光那一列是为了区分
+ * 「没人来」和「来了没进来」——这两种情况要做的处理完全相反。
+ */
+function hotRows(items) {
+  if (!items || !items.length) {
+    return '<p class="muted">最近 24 小时还没有点击。短链被访问后这里会实时排出来。</p>';
+  }
+  const max = Math.max(1, ...items.map((i) => i.windowClicks));
+  return items
+    .map(
+      (i) => `<div class="hot-row">
+      <span class="hot-badge">${num(i.windowClicks)}</span>
+      <div class="min0">
+        <a class="hot-title truncate" href="#/links?q=${encodeURIComponent(i.code)}">${esc(i.title || '/' + i.code)}</a>
+        <div class="hot-meta">
+          <span class="mono">/${esc(i.code)}</span>
+          ${i.group ? `<span class="tag tag-brand">${esc(i.group.name)}</span>` : ''}
+          <span class="muted">${i.windowViews ? `曝光 ${num(i.windowViews)} 次` : '没有建页曝光'}</span>
+        </div>
+        <span class="hot-bar"><i style="width:${Math.max(3, (i.windowClicks / max) * 100)}%"></i></span>
+      </div>
+      <span class="muted nowrap">${i.lastClickAt ? timeAgo(i.lastClickAt) : '—'}</span>
+    </div>`,
+    )
+    .join('');
+}
+
 /* ---------- 视图：概览 ---------- */
 async function viewDashboard(root) {
   const { result } = await api('/admin/api/overview');
@@ -406,6 +473,7 @@ async function viewDashboard(root) {
     <button class="btn btn-ghost btn-sm" id="flush-btn">立即落库计数</button>
     <a class="btn btn-primary btn-sm" href="#/create">${ic('plus')} 新建短链</a>
   </div>
+  ${digestBlock(result.digest)}
   <div class="grid-cards">
     <div class="kpi"><div class="label">短链总数</div><div class="value">${num(result.total)}</div><div class="delta">${num(result.active)} 条生效中 · 今日新增 ${num(result.todayNew || 0)}</div></div>
     <div class="kpi"><div class="label">累计点击</div><div class="value">${num(result.clicks)}</div><div class="delta">今日 ${num(result.todayClicks)}</div></div>
@@ -422,6 +490,16 @@ async function viewDashboard(root) {
       <div class="table-wrap"><table class="tbl-top"><tbody>${topRows}</tbody></table></div>
     </section>
   </div>
+  <section class="card" style="margin-top:18px">
+    <div class="card-head">
+      <h2>热点榜</h2>
+      <span class="row" style="gap:8px">
+        <span class="tag">最近 24 小时新增点击</span>
+        <a class="btn btn-ghost btn-sm" href="#/links?sort=recent">按热度看全部</a>
+      </span>
+    </div>
+    <div class="card-body stack" style="gap:12px">${hotRows(result.hot)}</div>
+  </section>
   <div class="split" style="margin-top:18px">
     <section class="card live-card">
       <div class="card-head">
@@ -494,11 +572,12 @@ async function viewDashboard(root) {
 
 /* ---------- 视图：短链列表 ---------- */
 async function viewLinks(root) {
-  const { page, q, status, sort, tag, group, health } = state.links;
+  const { page, q, status, sort, tag, group, health, heat } = state.links;
   const params = new URLSearchParams({ page, q, status, sort, perPage: 20 });
   if (tag) params.set('tag', tag);
   if (group) params.set('group', group);
   if (health) params.set('health', health);
+  if (heat) params.set('heat', heat);
   const { result } = await api(`/admin/api/links?${params}`);
   state.links.page = result.page;
   // 页码越界（删完最后一页）时回退一页重来
@@ -536,6 +615,13 @@ async function viewLinks(root) {
       <button class="chip ${health === 'warn' ? 'on' : ''}" data-health="warn"><i class="dotcolor" style="background:var(--warn)"></i>疑似失效<i>${hs.warn}</i></button>
       <button class="chip ${health === 'ok' ? 'on' : ''}" data-health="ok"><i class="dotcolor" style="background:var(--ok)"></i>正常<i>${hs.ok}</i></button>
       <button class="chip ${health === 'unknown' ? 'on' : ''}" data-health="unknown"><i class="dotcolor" style="background:rgba(139,152,214,.45)"></i>未检测<i>${hs.unknown}</i></button>
+    </div>`;
+
+  // 热度筛选：和健康一样是一眼要能读过筛的条件，但基准是「全库最高点击数」而不是绝对值
+  const heatChips = `<div class="tagbar"><span class="muted">热度</span>
+      <button class="chip ${heat ? '' : 'on'}" data-heat="">全部</button>
+      <button class="chip ${heat === 'hot' ? 'on' : ''}" data-heat="hot"><i class="dotcolor" style="background:var(--err)"></i>热门</button>
+      <button class="chip ${heat === 'warm' ? 'on' : ''}" data-heat="warm"><i class="dotcolor" style="background:var(--warn)"></i>有热度</button>
     </div>`;
 
   const rows = result.items.length
@@ -605,6 +691,7 @@ async function viewLinks(root) {
         ['code_asc', '短码 A→Z'],
         ['health_asc', '健康度优先'],
         ['health_at_asc', '最久未检测'],
+        ['recent_desc', '最近 24 小时热度'],
       ]
         .map(([v, t]) => `<option value="${v}" ${sort === v ? 'selected' : ''}>${t}</option>`)
         .join('')}
@@ -619,6 +706,7 @@ async function viewLinks(root) {
   ${groupChips}
   ${tagChips}
   ${healthChips}
+  ${heatChips}
   <div id="batchbar"></div>
   <div class="card">
     <div class="table-wrap">
@@ -775,6 +863,14 @@ async function viewLinks(root) {
     }),
   );
 
+  $$('[data-heat]', root).forEach((chip) =>
+    chip.addEventListener('click', () => {
+      state.links.heat = chip.dataset.heat;
+      state.links.page = 1;
+      render();
+    }),
+  );
+
   $$('[data-tag]', root).forEach((chip) =>
     chip.addEventListener('click', () => {
       state.links.tag = chip.dataset.tag;
@@ -812,6 +908,8 @@ async function viewLinks(root) {
   });
   $('#sort-filter').addEventListener('change', (e) => {
     state.links.sort = e.target.value;
+    // 参数已经用过了，之后以用户的选择为准，否则一改排序就被地址栏里的旧值顶回去
+    state.linksFromHash = false;
     render();
   });
   $$('[data-page]', root).forEach((btn) =>
@@ -1800,6 +1898,9 @@ async function showStats(link) {
   const bars = result.daily
     .map((d) => `<div class="bar" style="height:${Math.max(2, (d.clicks / max) * 100)}%" title="${esc(d.day)} · ${d.clicks} 次"></div>`)
     .join('');
+  // 曝光与落地放同一张卡里：单独看点击数永远分不清「没人来」和「来了没进来」
+  const windowClicks = result.daily.reduce((s, d) => s + d.clicks, 0);
+  const rate = result.views ? `${((windowClicks / result.views) * 100).toFixed(0)}%` : '—';
   const list = (items, key) =>
     items.length
       ? items.map((i) => `<div class="row" style="justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line)"><span class="truncate">${esc(i[key] || '直接访问')}</span><span class="mono muted">${num(i.clicks)}</span></div>`).join('')
@@ -1811,7 +1912,8 @@ async function showStats(link) {
     bodyHtml: `<div class="grid-cards" style="margin-bottom:14px">
       <div class="kpi"><div class="label">总点击</div><div class="value">${num(result.clicks)}</div></div>
       <div class="kpi"><div class="label">最近点击</div><div class="value" style="font-size:16px">${timeAgo(result.lastClickAt)}</div></div>
-      <div class="kpi"><div class="label">近 30 天</div><div class="value">${num(result.daily.reduce((s, d) => s + d.clicks, 0))}</div></div>
+      <div class="kpi"><div class="label">近 30 天点击</div><div class="value">${num(windowClicks)}</div></div>
+      <div class="kpi"><div class="label">建页曝光 / 落点率</div><div class="value" style="font-size:19px">${result.views ? `${num(result.views)} · ${rate}` : '未开启'}</div><div class="delta">${result.views ? '曝光不等于点击，两者分开记' : '这条短链没走建页，直接跳转'}</div></div>
     </div>
     <div class="bars-wrap" style="margin-bottom:18px"><div class="bars">${bars}</div>
       <div class="bars-axis"><span>${esc(result.daily[0]?.day.slice(5) || '')}</span><span>${esc(result.daily.at(-1)?.day.slice(5) || '')}</span></div></div>
@@ -1942,6 +2044,17 @@ async function viewSources(root) {
         .join('')
     : '<p class="muted">还没有平台数据。</p>';
 
+  // 「直接访问 / 无来源」单独一条：它没有域名，挂在站点榜里既点不开也没法比，
+  // 但它往往真的是最大的一块，所以给一条和其他站点同一视觉重量的行
+  const directRow = result.direct
+    ? `<div class="rank">
+      <span class="rank-name truncate"><i class="dotcolor" style="background:rgba(139,152,214,.45)"></i>直接访问 / 无来源</span>
+      <span class="rank-bar"><i style="width:${Math.max(2, (result.direct / Math.max(1, result.refs[0]?.clicks || 1)) * 100)}%"></i></span>
+      <span class="rank-num mono">${num(result.direct)}</span>
+      <span class="rank-pct muted">${share(result.direct)}%</span>
+    </div>`
+    : '';
+
   const countryRows = (result.countries || []).length
     ? result.countries
         .map((c) => `<div class="rank">
@@ -1970,7 +2083,7 @@ async function viewSources(root) {
   <div class="split">
     <section class="card">
       <div class="card-head"><h2>来源站点 Top 30</h2></div>
-      <div class="card-body stack" style="gap:10px">${refRows}</div>
+      <div class="card-body stack" style="gap:10px">${refRows}${directRow}</div>
     </section>
     <section class="card">
       <div class="card-head"><h2>访问平台</h2></div>
@@ -3192,13 +3305,34 @@ async function render() {
   closeLiveFeed();
   const { name, params } = currentRoute();
   const view = VIEWS[name] ? name : 'dashboard';
-  // 带参数的链接（比如「查看死链」）直接落到对应的筛选条件上
-  const health = params.get('health');
-  if (view === 'links' && health !== null) {
-    state.links.health = health;
-    state.links.page = 1;
+  if (view !== 'links') state.linksFromHash = false;
+  // 带参数的链接（比如「查看死链」「按热度看全部」）直接落到对应的筛选条件上
+  if (view === 'links' && !state.linksFromHash) {
+    let jumped = false;
+    const health = params.get('health');
+    if (health !== null) {
+      state.links.health = health;
+      jumped = true;
+    }
+    // 地址栏里写的是界面上的排序键（recent），接口要的是 recent_desc
+    const sortParam = params.get('sort');
+    const sort = sortParam === 'recent' ? 'recent_desc' : sortParam;
+    if (sort) {
+      state.links.sort = sort;
+      jumped = true;
+    }
+    const q = params.get('q');
+    if (q !== null) {
+      state.links.q = q;
+      jumped = true;
+    }
+    if (jumped) state.links.page = 1;
   }
   state.view = view;
+  // 记住这一屏是从地址栏参数跳进来的：用户之后再改筛选，就不能被参数里那套覆盖回去
+  if (view === 'links' && (params.get('sort') || params.get('health') || params.get('q') !== null)) {
+    state.linksFromHash = true;
+  }
   $$('.navlink').forEach((a) => a.classList.toggle('active', a.dataset.nav === view));
   const root = $('#view');
   try {

@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
+import { dateKey } from './util.js';
+
 const MIGRATIONS = [
   function v1(db) {
     db.exec(`
@@ -378,6 +380,9 @@ function migrate(db) {
  * 链接查询的公共列。分组名用相关子查询取，避免每个调用点都要写 JOIN。
  * deleted_at 不为空表示在回收站里，业务查询一律过滤掉。
  */
+/** 热度分档：占全库最高点击数的比例下限 */
+export const HEAT_BANDS = { hot: 0.6, warm: 0.2 };
+
 const LINK_COLUMNS = `id, code, url, title, note, tags, status, group_id,
   (SELECT name FROM groups WHERE groups.id = links.group_id) AS group_name,
   password IS NOT NULL AS protected,
@@ -447,6 +452,8 @@ export class Store {
       linkRefs: prepare('SELECT host, clicks FROM click_refs WHERE code = ? ORDER BY clicks DESC LIMIT ?'),
       linkAgents: prepare('SELECT platform, clicks FROM click_agents WHERE code = ? ORDER BY clicks DESC LIMIT ?'),
       // 来源/平台聚合同样排除回收站里的短链，保持和总量口径一致
+      // 空 host 就是「浏览器没上报 referrer」的直接访问。它和真实的域名混在一条榜里，
+      // 界面只能把它排在最后并显示成「直接访问」，而它往往又是最大的一块
       globalRefs: prepare(`SELECT host, SUM(clicks) AS clicks, COUNT(DISTINCT code) AS links FROM click_refs
         WHERE code NOT IN (SELECT code FROM links WHERE deleted_at IS NOT NULL)
         GROUP BY host ORDER BY clicks DESC LIMIT ?`),
@@ -634,8 +641,14 @@ export class Store {
     return this.sql.listTargets.all(Number(linkId)).filter((t) => t.enabled && t.weight > 0);
   }
 
-  /** 带条件搜索 + 排序 + 分页的链接列表（不含回收站） */
-  listLinks({ q = '', status = '', tag = '', group = '', health = '', sort = 'created_desc', page = 1, perPage = 20 } = {}) {
+  /**
+   * 带条件搜索 + 排序 + 分页的链接列表（不含回收站）。
+   *
+   * `heat` 用不了专门的索引，因为它要先知道「全库最高点击数」才能分档。
+   * 查询本身仍然只扫一遍 links 表（一条聚合 + 一条分页），
+   * 比把排序交给索引但算不出相对热度要实在。
+   */
+  listLinks({ q = '', status = '', tag = '', group = '', health = '', heat = '', sort = 'created_desc', sinceDay = '', page = 1, perPage = 20 } = {}) {
     const where = ['deleted_at IS NULL'];
     const params = [];
     if (q) {
@@ -666,6 +679,12 @@ export class Store {
       // 「还没测过」= 空串，不是 null
       where.push("health_status = ''");
     }
+    // 热度筛选：按「点击数占全库最高点击数」的比例分档，而不是绝对值。
+    // 绝对值不可比——一个刚上线的站，10 次点击的小时榜第一名也值得看
+    if (HEAT_BANDS[heat]) {
+      where.push('clicks >= ?');
+      params.push(Math.max(1, Math.ceil(HEAT_BANDS[heat] * this.maxClicks())));
+    }
     if (group === 'none') {
       where.push('group_id IS NULL');
     } else if (group) {
@@ -683,13 +702,55 @@ export class Store {
       health_asc: "(health_status = '') DESC, health_status ASC, health_miss DESC",
       health_at_asc: 'health_at IS NOT NULL, health_at ASC',
     };
-    const order = orderMap[sort] || orderMap.created_desc;
+    // 小时榜按「最近 24 小时新增点击」排，普通排序键里没有这个维度。
+    // 时间基准由调用方给（服务端渲染与管理台共用同一条 SQL），不在这里取 Date.now()
+    let order = orderMap[sort] || orderMap.created_desc;
+    if (sort === 'recent_desc') {
+      // 日期是本地时区的 YYYY-MM-DD，由调用方决定窗口起点
+      const day = sinceDay || dateKey(new Date(Date.now() - 86400000));
+      order = `(SELECT COALESCE(SUM(clicks), 0) FROM click_daily WHERE code = links.code AND day >= '${day}') DESC, last_click_at DESC, id DESC`;
+    }
     const total = this.db.prepare(`SELECT COUNT(*) AS n FROM links ${whereSql}`).get(...params).n;
     const offset = (page - 1) * perPage;
     const rows = this.db
       .prepare(`SELECT ${LINK_COLUMNS} FROM links ${whereSql} ORDER BY ${order} LIMIT ? OFFSET ?`)
       .all(...params, perPage, offset);
     return { rows, total };
+  }
+
+  /** 全库最高点击数，热度分档的基准 */
+  maxClicks() {
+    return this.db.prepare('SELECT COALESCE(MAX(clicks), 0) AS n FROM links WHERE deleted_at IS NULL').get().n || 0;
+  }
+
+  /**
+   * 热点榜：最近 N 小时新增点击最多的短链。
+   *
+   * 每行都是今天新建的、点击数还没拉开多少，按累计点击排和按创建时间排没区别；
+   * 真正想回答的是「现在什么在被点」。所以窗口取最近 24 小时的新增点击，
+   * 同时带上窗口内的曝光与落地，一眼能看出是没人来还是来了没进来。
+   *
+   * 没有点击的短链不进榜：榜单里塞满 0 只会把有数据的那几条挤下去。
+   */
+  hotLinks({ hours = 24, limit = 8, now = Date.now() } = {}) {
+    const span = Math.max(1, Math.min(24 * 30, Number(hours) || 24));
+    const from = now - span * 3600000;
+    const fromDay = dateKey(new Date(from - 86400000));
+    const rows = this.db
+      .prepare(
+        `SELECT l.id, l.code, l.title, l.url, l.group_id,
+           (SELECT name FROM groups WHERE groups.id = l.group_id) AS group_name,
+           (SELECT COALESCE(SUM(clicks), 0) FROM click_daily d WHERE d.code = l.code AND d.day >= ?) AS window_clicks,
+           (SELECT COALESCE(SUM(views), 0) FROM landing_views v WHERE v.code = l.code AND v.day >= ?) AS window_views,
+           l.clicks AS total_clicks, l.last_click_at
+         FROM links l
+         WHERE l.deleted_at IS NULL`,
+      )
+      .all(fromDay, fromDay)
+      .filter((r) => r.window_clicks > 0)
+      .sort((a, b) => b.window_clicks - a.window_clicks || (b.last_click_at || 0) - (a.last_click_at || 0))
+      .slice(0, Math.max(1, limit));
+    return { hours: span, since: from, rows };
   }
 
   listTags() {

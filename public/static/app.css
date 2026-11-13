@@ -1153,3 +1153,47 @@ tbody tr.picked { background: rgba(139, 92, 246, .1); }
 .landing-grid .seg button.on { background: rgba(139, 92, 246, .22); color: var(--text); }
 .landing-hint { font-size: 12px; color: var(--text-mute); margin: 0; }
 .qr-saved-hint { font-size: 12px; color: var(--text-mute); }
+
+/* ---------- 概览：本期要点 + 热点榜 ---------- */
+/* 要点条是「可以点的结论」，所以每条都是一个链接，右侧数值对齐成窄列 */
+.digest .card-body.digest-list { display: grid; gap: 2px; padding: 8px 10px 12px; }
+.digest-item {
+  display: grid; grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center; gap: 10px;
+  padding: 9px 10px; border-radius: 10px; font-size: 13.5px;
+  color: var(--text-dim); text-decoration: none;
+  transition: background .14s ease, color .14s ease;
+}
+.digest-item:hover { background: rgba(139, 152, 214, .1); color: var(--text); }
+.digest-ico { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 6px; }
+.digest-text { min-width: 0; }
+.digest-val { font-size: 12.5px; }
+.digest-item.k-up { color: #b7f3d9; }
+.digest-item.k-up .digest-ico { color: var(--ok); }
+.digest-item.k-down, .digest-item.k-warn { color: #ffd9d9; }
+.digest-item.k-down .digest-ico, .digest-item.k-warn .digest-ico { color: var(--err); }
+.digest-item.k-info .digest-ico, .digest-item.k-flat .digest-ico, .digest-item.k-muted .digest-ico { color: var(--text-mute); }
+.digest-item.k-muted { color: var(--text-mute); }
+.digest.warn { border-color: rgba(248, 113, 113, .34); }
+
+/* 热点榜：徽章是窗口内新增点击，条是相对最高那条的比例 */
+.hot-row { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.hot-badge {
+  display: grid; place-items: center; height: 30px; border-radius: 9px;
+  background: rgba(139, 92, 246, .16); border: 1px solid rgba(139, 92, 246, .34);
+  color: #ded4ff; font-family: var(--mono); font-size: 13px;
+}
+.hot-title { display: block; font-size: 13.5px; font-weight: 560; color: var(--text); text-decoration: none; }
+.hot-title:hover { color: #cbbcff; }
+.hot-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-mute); margin: 2px 0 5px; flex-wrap: wrap; }
+.hot-bar { display: block; height: 5px; border-radius: 999px; background: rgba(139, 152, 214, .1); overflow: hidden; }
+.hot-bar i { display: block; height: 100%; border-radius: 999px; background: var(--grad); }
+@media (max-width: 620px) {
+  .hot-row { grid-template-columns: 40px minmax(0, 1fr); gap: 10px; }
+  /* 窄屏下「多久之前」换到第二行，否则标题只能分到很窄一条 */
+  .hot-row > .muted.nowrap { grid-column: 2; justify-self: start; font-size: 11.5px; }
+  .digest-item { grid-template-columns: 16px minmax(0, 1fr); row-gap: 2px; }
+  .digest-val { grid-column: 2; justify-self: start; }
+}
+/* 日报里「待处理」那一段和前面对比结论分开，扫一眼就知道有几件事要动手 */
+.digest-sub { margin: 10px 0 2px; padding: 0 10px; font-size: 11.5px; letter-spacing: .04em; color: var(--text-mute); }

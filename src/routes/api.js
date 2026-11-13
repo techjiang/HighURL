@@ -185,6 +185,10 @@ export function statsFor(store, row, days = 30) {
     platforms: store.sql.linkAgents.all(row.code, 10),
     countries: store.sql.linkCountries.all(row.code, 12),
     targets: store.listTargets(row.id).map(serializeTarget),
+    // 建页曝光：和点击分开统计，混在一起会让「点击数」和漏斗对不上
+    views: store.db
+      .prepare(`SELECT COALESCE(SUM(views), 0) AS n FROM landing_views WHERE code = ? AND day >= ?`)
+      .get(row.code, since).n,
   };
 }
 
