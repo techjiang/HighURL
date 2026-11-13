@@ -43,3 +43,44 @@ export function funnelSummary(store) {
     dead: rows.filter((r) => r.views > 0 && r.clicks === 0).length,
   };
 }
+
+/**
+ * 投放复盘的下钻：某个渠道里，各条短链各自的落点率。
+ *
+ * 为什么单独一条查询，而不是复用 funnelByHost + 前端过滤：
+ * 「这条链在这个渠道的落点率」= 该渠道的曝光 + **该渠道的**落地。
+ * 拿全量落地去除渠道曝光，得到的是跨渠道混出来的数字——看着精确，实际错。
+ * 所以渠道一旦指定，曝光和落地两边都按 host 过滤，缺一边就都不是这个渠道的数。
+ *
+ * 排序按「曝光 × 未落点」倒推：先看人多且没进来的那些，
+ * 那是话术或按钮的问题，不是流量的错。零落地单独标出来。
+ */
+export function hostDrilldown(store, host, { limit = 50 } = {}) {
+  const views = new Map();
+  for (const row of store.sql.landingByHost.all(host)) {
+    views.set(row.code, (views.get(row.code) || 0) + (Number(row.views) || 0));
+  }
+  const clicks = new Map();
+  for (const row of store.sql.redirectsByHost.all(host)) {
+    clicks.set(row.code, (clicks.get(row.code) || 0) + (Number(row.clicks) || 0));
+  }
+  const codes = new Set([...views.keys(), ...clicks.keys()]);
+  const rows = [];
+  for (const code of codes) {
+    const v = views.get(code) || 0;
+    const c = clicks.get(code) || 0;
+    const link = store.findLinkByCode(code);
+    rows.push({
+      code,
+      // 短链被软删除后仍在统计表里；下钻列表要能看出这一条已经不在库中
+      title: link ? link.title || '' : '',
+      gone: !link,
+      views: v,
+      clicks: c,
+      rate: rateOf(v, c),
+      lost: Math.max(0, v - c),
+    });
+  }
+  rows.sort((a, b) => b.lost - a.lost || b.views - a.views || a.code.localeCompare(b.code));
+  return rows.slice(0, limit);
+}

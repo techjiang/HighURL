@@ -352,6 +352,29 @@ const MIGRATIONS = [
     // 而短链表本来就不大，一条索引足够
     db.exec('CREATE INDEX IF NOT EXISTS idx_links_expire ON links(expire_at)');
   },
+
+  /**
+   * v11：多管理员账号。
+   *
+   * 原来 admins 只有一张无角色的表，等于「谁拿到密码谁就是超管」。
+   * 一个站交给两三个人维护时，这是真问题：实习生要能看数据但不该动备份，
+   * 运维要能重启和恢复但不必管内容。
+   *
+   * role 只有两档，不是一套权限矩阵：
+   * - owner：全部能力，含账号管理、备份恢复、系统设置
+   * - viewer：只读。能看所有报表和列表，改不了任何东西
+   *
+   * 不设第三档（比如「编辑」）是因为说不清边界：能改短链的人必然能改目标地址，
+   * 而目标地址就是一次跳转指向哪里——这条线画在「能不能写」上最清楚。
+   *
+   * 另外记 created_by：账号是谁加的。出了事要问人，先得知道问谁。
+   */
+  function v11(db) {
+    const existing = new Set(db.prepare('PRAGMA table_info(admins)').all().map((c) => c.name));
+    if (!existing.has('role')) db.exec("ALTER TABLE admins ADD COLUMN role TEXT NOT NULL DEFAULT 'owner'");
+    if (!existing.has('created_by')) db.exec("ALTER TABLE admins ADD COLUMN created_by TEXT NOT NULL DEFAULT ''");
+    if (!existing.has('disabled_at')) db.exec('ALTER TABLE admins ADD COLUMN disabled_at INTEGER');
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -504,6 +527,15 @@ export class Store {
       redirectsByCodeHost: prepare(`SELECT r.code, r.host, SUM(r.clicks) AS clicks FROM click_refs r
         WHERE r.code NOT IN (SELECT code FROM links WHERE deleted_at IS NOT NULL)
         GROUP BY r.code, r.host`),
+      // 下钻用：指定渠道时，曝光和落地都要按这个渠道过滤。
+      // 落地侧不能复用上面那条全量求和——「某渠道的落地数」和「某渠道的曝光数」
+      // 必须来自同一个渠道，否则算出来的落点率是跨渠道混出来的假数字。
+      landingByHost: prepare(`SELECT lv.code, SUM(lv.views) AS views FROM landing_views lv
+        WHERE lv.host = ? AND lv.code NOT IN (SELECT code FROM links WHERE deleted_at IS NOT NULL)
+        GROUP BY lv.code`),
+      redirectsByHost: prepare(`SELECT r.code, SUM(r.clicks) AS clicks FROM click_refs r
+        WHERE r.host = ? AND r.code NOT IN (SELECT code FROM links WHERE deleted_at IS NOT NULL)
+        GROUP BY r.code`),
       listGroups: prepare('SELECT * FROM groups ORDER BY name COLLATE NOCASE'),
       getGroupById: prepare('SELECT * FROM groups WHERE id = ?'),
       getGroupByName: prepare('SELECT * FROM groups WHERE name = ? COLLATE NOCASE'),
@@ -516,10 +548,16 @@ export class Store {
       setSetting: prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'),
       listSettings: prepare('SELECT key, value FROM settings'),
       getAdmin: prepare('SELECT * FROM admins WHERE username = ?'),
-      getAdminById: prepare('SELECT id, username, created_at, last_login_at FROM admins WHERE id = ?'),
+      getAdminById: prepare('SELECT id, username, role, created_at, created_by, last_login_at, disabled_at FROM admins WHERE id = ?'),
       countAdmins: prepare('SELECT COUNT(*) AS n FROM admins'),
-      insertAdmin: prepare('INSERT INTO admins (username, password_hash, created_at) VALUES (?, ?, ?)'),
+      countOwners: prepare("SELECT COUNT(*) AS n FROM admins WHERE role = 'owner' AND disabled_at IS NULL"),
+      listAdmins: prepare(`SELECT id, username, role, created_at, created_by, last_login_at, disabled_at
+        FROM admins ORDER BY disabled_at IS NOT NULL, created_at ASC`),
+      insertAdmin: prepare('INSERT INTO admins (username, password_hash, created_at, role, created_by) VALUES (?, ?, ?, ?, ?)'),
       updateAdminPassword: prepare('UPDATE admins SET password_hash = ? WHERE id = ?'),
+      setAdminRole: prepare('UPDATE admins SET role = ? WHERE id = ?'),
+      setAdminDisabled: prepare('UPDATE admins SET disabled_at = ? WHERE id = ?'),
+      deleteAdmin: prepare('DELETE FROM admins WHERE id = ?'),
       touchAdminLogin: prepare('UPDATE admins SET last_login_at = ? WHERE id = ?'),
       listKeys: prepare('SELECT id, name, prefix, scope, enabled, created_at, last_used_at FROM api_keys ORDER BY id DESC'),
       getKeyByHash: prepare('SELECT * FROM api_keys WHERE hash = ? AND enabled = 1'),

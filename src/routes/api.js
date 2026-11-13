@@ -25,7 +25,14 @@ export function registerApiRoutes(router, ctx) {
     // verifySession，它拿到的不是 token 字符串，签名校验必然失败，
     // 于是「带会话调 API」这条路径其实是 401——文档里写了却一直不生效。
     const session = ctx.auth.verifySession(parseCookie(req.headers.cookie || '')[SESSION_COOKIE]);
-    if (session) return { kind: 'session', name: session.username };
+    if (session) {
+      // 只读账号拿着会话调写接口，和拿只读密钥是一回事：
+      // requireApi 的第二道关（scope）管不到会话，所以在这里补上，不靠路由自觉
+      if (scope === 'write' && session.role !== 'owner') {
+        throw new HttpError(403, '当前账号为只读权限，不能修改', 'readonly');
+      }
+      return { kind: 'session', name: session.username };
+    }
     throw new HttpError(401, '需要 API 密钥或管理员登录', 'unauthorized');
   }
 

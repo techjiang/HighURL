@@ -403,6 +403,11 @@ function hotRows(items) {
 /* ---------- 视图：概览 ---------- */
 async function viewDashboard(root) {
   const { result } = await api('/admin/api/overview');
+  // 只读账号看到的第一句话就该说明这件事：不然他会点五个按钮，
+  // 每个都回一句「无权限」，然后以为是系统坏了
+  const roBanner = state.me?.readonly
+    ? '<div class="banner" style="margin-bottom:14px">当前账号为<b>只读</b>权限：数据都能看，改动一律不生效。需要写权限请让管理员在「账号」页调整。</div>'
+    : '';
   const max = Math.max(1, ...result.daily.map((d) => d.clicks));
   const bars = result.daily
     .map((d) => `<div class="bar" style="height:${Math.max(3, (d.clicks / max) * 100)}%" title="${esc(d.day)} · ${d.clicks} 次"></div>`)
@@ -479,8 +484,9 @@ async function viewDashboard(root) {
   root.innerHTML = `
   <div class="topbar"><div><h1>概览</h1><div class="sub">最近 14 天运行情况</div></div><span class="spacer"></span>
     <button class="btn btn-ghost btn-sm" id="flush-btn">立即落库计数</button>
-    <a class="btn btn-primary btn-sm" href="#/create">${ic('plus')} 新建短链</a>
+    <a class="btn btn-primary btn-sm" href="#/create" data-writes>${ic('plus')} 新建短链</a>
   </div>
+  ${roBanner}
   ${digestBlock(result.digest)}
   <div class="grid-cards">
     <div class="kpi"><div class="label">短链总数</div><div class="value">${num(result.total)}</div><div class="delta">${num(result.active)} 条生效中 · 今日新增 ${num(result.todayNew || 0)}</div></div>
@@ -672,9 +678,9 @@ async function viewLinks(root) {
           <button class="btn btn-ghost btn-sm btn-icon" data-act="stats" title="统计" aria-label="统计">${ic('chart')}</button>
           <button class="btn btn-ghost btn-sm btn-icon" data-act="qr" title="二维码" aria-label="二维码">${ic('qr')}</button>
           <button class="btn btn-ghost btn-sm btn-icon" data-act="history" title="变更历史" aria-label="变更历史">${ic('history')}</button>
-          <button class="btn btn-ghost btn-sm btn-icon" data-act="renew" title="续期" aria-label="续期">${ic('clock')}</button>
-          <button class="btn btn-ghost btn-sm btn-icon" data-act="edit" title="编辑" aria-label="编辑">${ic('edit')}</button>
-          <button class="btn btn-ghost btn-sm btn-icon" data-act="del" title="删除" aria-label="删除">${ic('trash')}</button>
+          <button class="btn btn-ghost btn-sm btn-icon" data-act="renew" data-writes title="续期" aria-label="续期">${ic('clock')}</button>
+          <button class="btn btn-ghost btn-sm btn-icon" data-act="edit" data-writes title="编辑" aria-label="编辑">${ic('edit')}</button>
+          <button class="btn btn-ghost btn-sm btn-icon" data-act="del" data-writes title="删除" aria-label="删除">${ic('trash')}</button>
         </div>
       </td>
     </tr>`,
@@ -686,7 +692,7 @@ async function viewLinks(root) {
 
   root.innerHTML = `
   <div class="topbar"><div><h1>短链</h1><div class="sub">共 ${num(result.total)} 条</div></div><span class="spacer"></span>
-    <a class="btn btn-primary btn-sm" href="#/create">${ic('plus')} 新建</a>
+    <a class="btn btn-primary btn-sm" href="#/create" data-writes>${ic('plus')} 新建</a>
   </div>
   <div class="toolbar">
     <input type="search" id="search" placeholder="搜索短码 / 链接 / 标题 / 备注" value="${esc(q)}">
@@ -716,8 +722,8 @@ async function viewLinks(root) {
         .join('')}
     </select>
     <span class="spacer"></span>
-    <button class="btn btn-ghost btn-sm" id="health-btn" title="立刻检查目标链接是否还能打开">${ic('pulse')} 巡检目标链接</button>
-    <button class="btn btn-ghost btn-sm" id="sweep-btn" title="按设置里的策略处理已过期短链">回收过期</button>
+    <button class="btn btn-ghost btn-sm" id="health-btn" data-writes title="立刻检查目标链接是否还能打开">${ic('pulse')} 巡检目标链接</button>
+    <button class="btn btn-ghost btn-sm" id="sweep-btn" data-writes title="按设置里的策略处理已过期短链">回收过期</button>
     <button class="btn btn-ghost btn-sm" id="qr-all-btn" title="把当前筛选结果全部打包成 ZIP">${ic('qr')} 批量二维码</button>
     <button class="btn btn-ghost btn-sm" id="qr-sheet-btn" title="排成可打印的 A4 拼版 PDF">${ic('sheet')} 拼版打印</button>
     <a class="btn btn-ghost btn-sm" href="/admin/api/export.csv">导出 CSV</a>
@@ -1730,7 +1736,7 @@ async function viewCreate(root) {
         <div class="field"><label for="f-note">备注</label>
           <textarea id="f-note" name="note" placeholder="给未来的自己留个说明" maxlength="500"></textarea>
         </div>
-        <button class="btn btn-primary" type="submit" id="create-btn">创建短链</button>
+        <button class="btn btn-primary" type="submit" id="create-btn" data-writes>创建短链</button>
       </form>
     </div></section>
     <section class="card" id="result-panel"><div class="card-body">
@@ -2347,7 +2353,7 @@ async function viewRules(root) {
             <input id="r-pattern" placeholder="*SemrushBot* 或 /bot|crawl/i" required>
             <p class="hint">支持三种写法：<br>1. 关键字（不区分大小写）<br>2. 通配符：<span class="mono">*bot*</span><br>3. 正则：<span class="mono">/googlebot|bingbot/i</span></p>
           </div>
-          <button class="btn btn-primary" type="submit">添加规则</button>
+          <button class="btn btn-primary" type="submit" data-writes>添加规则</button>
         </form>
       </div>
     </section>
@@ -2407,7 +2413,7 @@ async function viewMigrate(root) {
         <label class="switch"><input type="checkbox" id="m-overwrite"><span>覆盖已存在的短码（默认跳过冲突项）</span></label>
         <div class="row">
           <button class="btn btn-ghost" id="m-preview">预检</button>
-          <button class="btn btn-primary" id="m-apply" disabled>开始导入</button>
+          <button class="btn btn-primary" id="m-apply" data-writes disabled>开始导入</button>
         </div>
       </div>
     </section>
@@ -2512,7 +2518,7 @@ async function viewApi(root) {
           <div class="field"><label>权限</label>
             <select id="k-scope"><option value="read,write">读写（创建/修改/删除）</option><option value="read">只读（查询）</option></select>
           </div>
-          <button class="btn btn-primary" type="submit">生成密钥</button>
+          <button class="btn btn-primary" type="submit" data-writes>生成密钥</button>
         </form>
       </div>
     </section>
@@ -2588,7 +2594,7 @@ async function viewBackup(root) {
           <select id="b-mode"><option value="merge">合并（同短码覆盖）</option><option value="replace">替换（清空后导入）</option></select>
         </div>
         <label class="switch"><input type="checkbox" id="b-settings"><span>同时恢复站点设置（baseUrl 等）</span></label>
-        <button class="btn btn-primary" id="b-apply" disabled>开始恢复</button>
+        <button class="btn btn-primary" id="b-apply" data-writes disabled>开始恢复</button>
         <p class="hint">选文件后先点「预检」看清会变成什么样，再决定是否替换。替换模式会清空现有短链、分组与统计。</p>
       </div>
     </section>
@@ -2982,7 +2988,7 @@ async function viewSettings(root) {
           <dt>主机名</dt><dd>${esc(result.meta.hostname)}</dd>
           <dt>数据库</dt><dd class="mono">SQLite (WAL)</dd>
         </dl>
-        <button class="btn btn-primary" id="save-btn">保存设置</button>
+        <button class="btn btn-primary" id="save-btn" data-writes>保存设置</button>
       </div>
     </section>
     <section class="card">
@@ -3187,7 +3193,7 @@ async function viewGroups(root) {
             </div>
           </div>
           <div class="field"><label>备注</label><input id="g-note" placeholder="可选，说明这个分组装什么" maxlength="200"></div>
-          <button class="btn btn-primary" type="submit">创建分组</button>
+          <button class="btn btn-primary" type="submit" data-writes>创建分组</button>
         </form>
         <p class="hint" style="margin-top:14px">删除分组不会删掉里面的短链，它们会回到「未分组」。</p>
       </div>
@@ -3363,8 +3369,9 @@ async function viewFunnel(root) {
     ? result.rows
         .map((r) => {
           const dead = r.views > 0 && r.clicks === 0;
-          return `<tr>
-        <td class="truncate">${esc(r.host || '无来源（直接打开）')}${dead ? ' <span class="tag tag-warn">零落地</span>' : ''}</td>
+          const label = r.host || '无来源（直接打开）';
+          return `<tr data-host="${esc(r.host)}">
+        <td class="truncate"><button class="drill-toggle" data-drill="${esc(r.host)}" aria-expanded="false"><span class="drill-caret">▸</span> ${esc(label)}${dead ? ' <span class="tag tag-warn">零落地</span>' : ''}</button></td>
         <td style="text-align:right"><span class="rank-bar" style="display:inline-block;width:90px"><i style="width:${Math.max(2, (r.views / maxViews) * 100)}%"></i></span></td>
         <td class="mono" style="text-align:right">${num(r.views)}</td>
         <td class="mono" style="text-align:right">${num(r.clicks)}</td>
@@ -3383,7 +3390,7 @@ async function viewFunnel(root) {
     <div class="kpi"><div class="label">零落地渠道</div><div class="value">${num(s.dead)}</div><div class="delta">有曝光、一次都没点进去</div></div>
   </div>
   <section class="card">
-    <div class="card-head"><h2>按渠道</h2><span class="tag">累计 · 与来源分析同一套 referrer 取值</span></div>
+    <div class="card-head"><h2>按渠道</h2><span class="tag">点渠道名可展开到短链</span></div>
     <div class="table-wrap"><table class="tbl-funnel">
       <thead><tr><th>渠道</th><th style="text-align:right">曝光</th><th style="text-align:right">曝光次数</th><th style="text-align:right">落地</th><th style="text-align:right">落点率</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -3394,10 +3401,67 @@ async function viewFunnel(root) {
     <div class="card-body stack" style="gap:8px">
       <p class="muted">曝光是「建页被渲染出来」的次数，落地是「点了继续访问并真的 302 过去」的次数。两者分开记，所以建页上线不会让历史点击数变得不可比。</p>
       <p class="muted">「零落地」多半是话术或按钮出了问题，而不是没人看——这类行最值得先查。</p>
+      <p class="muted">展开到短链时，两边的数都按这个渠道过滤。拿全量落地去除渠道曝光算出来的比例是跨渠道混出来的，看着精确、实际不对。</p>
       <p class="muted">没有 referrer 的曝光单独成行。没有 referrer 的落地在来源侧根本不存在，所以两边不会正好配平，这是正常的。</p>
       <p class="muted">带 <b>*</b> 的落点率超过 100%：曝光从建页打开那天才开始记，而落地点击里还含建页之前的历史数据。想得到干净的比例，就从启用建页那天起算。</p>
     </div>
   </section>`;
+
+  /**
+   * 下钻：点渠道名就地展开，不跳到别的页面。
+   * 复盘时的问题是「这个渠道哪条链没接住」，答案要和渠道在同一屏上，
+   * 跳走一次就得记住刚才那个数字再看下一屏，很容易看串。
+   */
+  $$('[data-drill]').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      const host = btn.dataset.drill;
+      const tr = btn.closest('tr');
+      const open = btn.getAttribute('aria-expanded') === 'true';
+      btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+      const existing = tr.nextElementSibling;
+      if (open) {
+        if (existing?.classList.contains('drill-row')) existing.remove();
+        return;
+      }
+      if (existing?.classList.contains('drill-row')) return;
+      const holder = document.createElement('tr');
+      holder.className = 'drill-row';
+      holder.innerHTML = '<td colspan="5" class="muted">加载中…</td>';
+      tr.after(holder);
+      try {
+        const { result: drill } = await api(`/admin/api/funnel?host=${encodeURIComponent(host)}`);
+        const list = drill.drill || [];
+        if (!list.length) {
+          holder.innerHTML = '<td colspan="5" class="muted">这个渠道下还没有数据</td>';
+          return;
+        }
+        const max = Math.max(1, ...list.map((r) => r.views));
+        holder.innerHTML = `<td colspan="5">
+          <table class="tbl-funnel" style="margin:0">
+            <thead><tr><th>短链</th><th style="text-align:right">曝光</th><th style="text-align:right">落地</th><th style="text-align:right">落点率</th><th style="text-align:right">没进去</th></tr></thead>
+            <tbody>${list
+              .map((r) => {
+                const dead = r.views > 0 && r.clicks === 0;
+                return `<tr>
+                <td class="truncate drill-code"><a href="#/links?q=${encodeURIComponent(r.code)}" class="hot-title">/${esc(r.code)}</a>
+                  <span class="truncate muted">${esc(r.title || (r.gone ? '短链已删除' : '无标题'))}</span>
+                  ${dead ? ' <span class="tag tag-warn">零落地</span>' : ''}</td>
+                <td style="text-align:right"><span class="rank-bar" style="display:inline-block;width:70px"><i style="width:${Math.max(2, (r.views / max) * 100)}%"></i></span></td>
+                <td class="mono" style="text-align:right">${num(r.views)}</td>
+                <td class="mono" style="text-align:right">${num(r.clicks)}</td>
+                <td class="mono" style="text-align:right">${r.rate === null ? '—' : `${(r.rate * 100).toFixed(0)}%`}</td>
+                <td class="mono dim" style="text-align:right">${num(r.lost)}</td>
+              </tr>`;
+              })
+              .join('')}</tbody>
+          </table>
+          <p class="hint" style="margin:8px 0 0 14px">按「没进去」倒序：人多却没人往下走的排最前。</p>
+        </td>`;
+      } catch (err) {
+        holder.innerHTML = `<td colspan="5" class="banner err">展开失败：${esc(err.message)}</td>`;
+      }
+    }),
+  );
 }
 
 /* ---------- 视图：举报箱 ---------- */
@@ -3459,6 +3523,115 @@ async function viewReports(root) {
 }
 
 /* ---------- 路由 ---------- */
+/* ---------- 视图：账号管理 ---------- */
+const ROLE_LABEL = { owner: '管理员', viewer: '只读' };
+
+async function viewAccounts(root) {
+  const { result } = await api('/admin/api/admins');
+  const me = result.me;
+  const rows = result.items
+    .map((a) => {
+      const self = a.id === me.id;
+      return `<tr data-id="${a.id}" class="${a.disabled ? 'row-dim' : ''}">
+      <td><b>${esc(a.username)}</b>${self ? ' <span class="tag">你</span>' : ''}</td>
+      <td><span class="tag ${a.role === 'owner' ? 'tag-ok' : ''}">${ROLE_LABEL[a.role] || a.role}</span></td>
+      <td>${a.disabled ? '<span class="tag tag-warn">已停用</span>' : '<span class="muted">启用</span>'}</td>
+      <td class="dim mono">${a.last_login_at ? esc(fmtDate(a.last_login_at)) : '从未登录'}</td>
+      <td class="dim">${esc(a.created_by || '安装时创建')}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-ghost btn-sm" data-role="${a.role === 'owner' ? 'viewer' : 'owner'}" ${self ? 'disabled title="不能改自己的角色"' : ''}>设为${a.role === 'owner' ? '只读' : '管理员'}</button>
+        <button class="btn btn-ghost btn-sm" data-reset>重置密码</button>
+        <button class="btn btn-ghost btn-sm" data-state="${a.disabled ? '0' : '1'}" ${self ? 'disabled title="不能停用当前登录的账号"' : ''}>${a.disabled ? '启用' : '停用'}</button>
+        <button class="btn btn-ghost btn-sm btn-icon" data-del title="删除" ${self ? 'disabled' : ''}>${ic('trash')}</button>
+      </td>
+    </tr>`;
+    })
+    .join('');
+
+  root.innerHTML = `
+  <div class="topbar"><div><h1>账号</h1><div class="sub">多个人一起维护时，别把所有人的权限都给成一样的</div></div><span class="spacer"></span>
+    <button class="btn btn-primary" id="add-admin" data-writes>${ic('plus')} 新增账号</button></div>
+  <section class="card">
+    <div class="table-wrap"><table class="tbl-admins">
+      <thead><tr><th>账号</th><th>角色</th><th>状态</th><th>最近登录</th><th>创建者</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  </section>
+  <section class="card" style="margin-top:18px">
+    <div class="card-head"><h2>两种角色的区别</h2></div>
+    <div class="card-body stack" style="gap:8px">
+      <p class="muted"><b>管理员</b>：全部能力，含账号管理、备份恢复、系统设置。</p>
+      <p class="muted"><b>只读</b>：能看所有报表、列表、统计和二维码，改不了任何东西。写接口一律拒。</p>
+      <p class="muted">最后一个管理员不能被降级、停用或删除——否则没人能再进账号页，只能回来改数据库。命令行留了一条路：<span class="mono">highurl admin reset --username x --password y</span>。</p>
+      <p class="muted">停用不是删除：账号还在，历史操作记录还挂得住，随时能再打开。停用后旧会话立刻失效，不用等 Cookie 过期。</p>
+    </div>
+  </section>`;
+
+  $('#add-admin').addEventListener('click', () => {
+    modal({
+      title: '新增账号',
+      bodyHtml: `<div class="field"><label for="nu">用户名</label><input id="nu" placeholder="3–32 位字母、数字或 _ . @ -"></div>
+        <div class="field"><label for="np">初始密码</label><input id="np" type="password" placeholder="至少 8 位"></div>
+        <div class="field"><label for="nr">角色</label><select id="nr"><option value="viewer">只读</option><option value="owner">管理员</option></select>
+        <p class="hint">默认给只读。需要改数据的再单独提上来。</p></div>`,
+      confirmText: '创建',
+      onConfirm: async (mask) => {
+        const username = $('#nu', mask).value.trim();
+        const password = $('#np', mask).value;
+        const role = $('#nr', mask).value;
+        await api('/admin/api/admins', { method: 'POST', body: { username, password, role } });
+        toast('账号已创建', 'ok');
+        render();
+      },
+    });
+  });
+
+  $$('tr[data-id]').forEach((tr) => {
+    const id = tr.dataset.id;
+    const name = tr.querySelector('b').textContent.trim();
+    tr.querySelector('[data-role]')?.addEventListener('click', async (e) => {
+      const role = e.currentTarget.dataset.role;
+      try {
+        await api(`/admin/api/admins/${id}/role`, { method: 'POST', body: { role } });
+        toast(`${name} 已设为${ROLE_LABEL[role]}`, 'ok');
+        render();
+      } catch (err) {
+        toast(err.message, 'err');
+      }
+    });
+    tr.querySelector('[data-reset]')?.addEventListener('click', () => {
+      modal({
+        title: `重置 ${name} 的密码`,
+        bodyHtml: `<div class="field"><label for="rp">新密码</label><input id="rp" type="password" placeholder="至少 8 位">
+          <p class="hint">不需要知道原密码——「忘密码了」正是唯一会用到这个的场景。</p></div>`,
+        confirmText: '重置',
+        danger: true,
+        onConfirm: async (mask) => {
+          await api(`/admin/api/admins/${id}/password`, { method: 'POST', body: { password: $('#rp', mask).value } });
+          toast('密码已重置', 'ok');
+        },
+      });
+    });
+    tr.querySelector('[data-state]')?.addEventListener('click', async (e) => {
+      const disabled = e.currentTarget.dataset.state === '1';
+      try {
+        await api(`/admin/api/admins/${id}/state`, { method: 'POST', body: { disabled } });
+        toast(disabled ? `${name} 已停用` : `${name} 已启用`, 'ok');
+        render();
+      } catch (err) {
+        toast(err.message, 'err');
+      }
+    });
+    tr.querySelector('[data-del]')?.addEventListener('click', () => {
+      confirmDialog('删除账号', `确定删除 ${name}？账号会被移除，历史操作记录保留。`, async () => {
+        await api(`/admin/api/admins/${id}`, { method: 'DELETE' });
+        toast('账号已删除', 'ok');
+        render();
+      }, { confirmText: '删除' });
+    });
+  });
+}
+
 const VIEWS = {
   dashboard: viewDashboard,
   links: viewLinks,
@@ -3474,6 +3647,7 @@ const VIEWS = {
   backup: viewBackup,
   trash: viewTrash,
   settings: viewSettings,
+  accounts: viewAccounts,
 };
 
 /** 解析 #/links?health=dead 这种带参数的地址 */
@@ -3542,5 +3716,24 @@ async function render() {
 window.addEventListener('hashchange', render);
 document.addEventListener('DOMContentLoaded', async () => {
   if (!location.hash) location.hash = '#/dashboard';
+  // 先拿到自己的角色：只读账号的界面要和能写的账号不一样，
+  // 让他在点击之前就知道哪些按钮是摆设，而不是点五个然后收五条报错
+  try {
+    const { result } = await api('/admin/api/me');
+    state.me = result;
+  } catch {
+    state.me = null;
+  }
+  if (state.me?.readonly) {
+    document.body.classList.add('readonly-account');
+    // 兜底：漏标 data-writes 的提交按钮，点下去也只给一句人话，别让服务端的 403 弹出来
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[type=submit]');
+      if (!btn || btn.dataset.writes !== undefined || btn.closest('.side-foot')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      toast('当前账号只读，这一下不会生效');
+    }, true);
+  }
   render();
 });

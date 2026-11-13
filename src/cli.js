@@ -23,6 +23,10 @@ const HELP = `HighURL ${pkg.version} · 高性能自托管短链接系统
   highurl migrate <文件>     导入 YOURLS dump / HighURL 备份 / CSV
   highurl stats              查看统计
   highurl expiring [--days 7] 列出即将到期的短链
+  highurl admin [list]       账号列表
+  highurl admin add --username x --password y [--role owner|viewer]
+  highurl admin reset --username x --password y   重置密码（忘密码时的救生门）
+  highurl admin role --username x --role viewer
   highurl doctor             自检运行环境
 
 通用选项:
@@ -35,6 +39,7 @@ const HELP = `HighURL ${pkg.version} · 高性能自托管短链接系统
   highurl serve --port 8080 --data /var/lib/highurl
   highurl init --username admin --password 's3cret-pass'
   highurl migrate yourls.sql
+  highurl admin add --username ops --password 's3cret-pass' --role viewer
 `;
 
 function parseArgs(argv) {
@@ -365,9 +370,44 @@ async function cmdDoctor(args) {
 const [, , command, ...rest] = process.argv;
 const args = parseArgs(rest);
 
+/**
+ * 账号管理。命令行必须留一条路：把最后一个 owner 停用/降级之后，
+ * 管理台上就没人能进「账号」页了，只能回来改数据库——那是最不该发生的事。
+ * 这里不做「最后一个 owner」这类保护，反而要能强行重置：它本来就是最后的救生门。
+ */
+async function cmdAdmin(args) {
+  const ctx = openContext(args);
+  const sub = String(args._?.[0] || args.action || 'list');
+  const auth = ctx.auth;
+  if (sub === 'list' || args.list) {
+    for (const row of auth.listAdmins()) {
+      console.log(`${row.username}\t${row.role}\t${row.disabled ? '已停用' : '启用'}${row.last_login_at ? `\t最近登录 ${new Date(row.last_login_at).toISOString().slice(0, 19).replace('T', ' ')}` : ''}`);
+    }
+  } else if (sub === 'add') {
+    if (!args.username || !args.password) throw new Error('用法：highurl admin add --username x --password y [--role owner|viewer]');
+    const created = auth.createAdmin(args.username, args.password, { role: args.role || 'viewer', createdBy: 'cli' });
+    console.log(`已创建 ${created.username}（${created.role}）`);
+  } else if (sub === 'reset') {
+    if (!args.username || !args.password) throw new Error('用法：highurl admin reset --username x --password y');
+    const row = ctx.store.sql.getAdmin.get(String(args.username).trim());
+    if (!row) throw new Error(`账号不存在：${args.username}`);
+    auth.changePassword(row.id, '', args.password, { reset: true, actor: 'cli' });
+    console.log(`已重置 ${row.username} 的密码`);
+  } else if (sub === 'role') {
+    const row = ctx.store.sql.getAdmin.get(String(args.username || '').trim());
+    if (!row) throw new Error(`账号不存在：${args.username}`);
+    const out = auth.setRole(row.id, args.role || 'viewer', 'cli');
+    console.log(`${out.username} 现在是 ${out.role}`);
+  } else {
+    throw new Error(`未知子命令：${sub}（可用：list / add / reset / role）`);
+  }
+  ctx.store.close();
+}
+
 const commands = {
   serve: cmdServe,
   init: cmdInit,
+  admin: cmdAdmin,
   backup: cmdBackup,
   verify: cmdVerify,
   restore: cmdRestore,

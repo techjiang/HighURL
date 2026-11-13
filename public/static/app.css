@@ -626,6 +626,29 @@ tbody tr.picked { background: rgba(139, 92, 246, .1); }
   .tbl-funnel td:nth-child(3)::before { content: '曝光 '; color: var(--text-mute); font-family: var(--font); }
   .tbl-funnel td:nth-child(4)::before { content: '落地 '; color: var(--text-mute); font-family: var(--font); }
   .tbl-funnel td:nth-child(5)::before { content: '落点率 '; color: var(--text-mute); font-family: var(--font); }
+
+  /* 下钻表有 6 列，不能套上面那套 5 列的网格：会整列错位、数字看不出属于谁。
+     窄屏下改成每行两块卡片（短链 / 四个数），标签全部显式写出来 */
+  .tbl-funnel tr.drill-row { display: block; padding: 0; border-bottom: 0; }
+  .tbl-funnel tr.drill-row > td { display: block; }
+  .tbl-funnel tr.drill-row table.tbl-funnel tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 8px; row-gap: 6px;
+    padding: 12px 2px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tbl-funnel tr.drill-row td:nth-child(1) { grid-area: 1 / 1 / 2 / 3; }
+  .tbl-funnel tr.drill-row td:nth-child(2) { display: none; }
+  .tbl-funnel tr.drill-row td:nth-child(3) { grid-area: 2 / 1; }
+  .tbl-funnel tr.drill-row td:nth-child(4) { grid-area: 2 / 2; }
+  .tbl-funnel tr.drill-row td:nth-child(5) { grid-area: 3 / 1; justify-self: start; }
+  .tbl-funnel tr.drill-row td:nth-child(6) { grid-area: 3 / 2; justify-self: start; }
+  .tbl-funnel tr.drill-row td:nth-child(3)::before { content: '曝光 '; }
+  .tbl-funnel tr.drill-row td:nth-child(4)::before { content: '落地 '; }
+  .tbl-funnel tr.drill-row td:nth-child(5)::before { content: '落点率 '; }
+  .tbl-funnel tr.drill-row td:nth-child(6)::before { content: '没进去 '; }
+  .tbl-funnel tr.drill-row p.hint { margin-left: 2px !important; }
 }
 
 /* 举报箱：状态 + 短链 + 类型一行，说明占满一行，操作按钮靠右 */
@@ -1197,3 +1220,44 @@ tbody tr.picked { background: rgba(139, 92, 246, .1); }
 }
 /* 日报里「待处理」那一段和前面对比结论分开，扫一眼就知道有几件事要动手 */
 .digest-sub { margin: 10px 0 2px; padding: 0 10px; font-size: 11.5px; letter-spacing: .04em; color: var(--text-mute); }
+
+/* ---------- 渠道下钻 ---------- */
+/* 点渠道名展开：这一行缩进一点，视觉上属于上面那个渠道 */
+.drill-row td { background: rgba(139, 152, 214, .05); }
+.drill-row .drill-code { padding-left: 14px; }
+.drill-toggle { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.drill-toggle:hover { color: #cbbcff; }
+.drill-caret { display: inline-block; width: 10px; color: var(--text-mute); transition: transform .14s ease; }
+.drill-toggle[aria-expanded="true"] .drill-caret { transform: rotate(90deg); }
+
+/* ---------- 账号管理 ---------- */
+.row-dim { opacity: .55; }
+.tbl-admins td { vertical-align: middle; }
+/* 只读账号：会写的按钮统一置灰，点之前就看得出用不了。
+   下载/复制这类只读动作不在此列——只读不等于只能干看着 */
+.readonly-account [data-writes],
+.readonly-account #flush-btn { opacity: .45; pointer-events: none; cursor: not-allowed; }
+.readonly-account .tbl-admins button { opacity: .45; pointer-events: none; cursor: not-allowed; }
+.readonly-account .editable, .readonly-account [data-editable] { cursor: default; }
+.readonly-account .side-foot .btn-primary { opacity: 1; pointer-events: auto; cursor: pointer; }
+
+@media (max-width: 620px) {
+  /* 账号表在窄屏下折成卡片：账号名一行，角色/状态同行，操作按钮换行，不横向滚。
+     每列都显式写上标签——卡片化之后没有表头，光摆几个值没人知道各自是什么 */
+  .tbl-admins { min-width: 0 !important; }
+  .tbl-admins thead { display: none; }
+  .tbl-admins tr {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 10px; row-gap: 6px;
+    padding: 14px 2px; border-bottom: 1px solid var(--line);
+  }
+  .tbl-admins td { display: block; padding: 0; border: 0; font-size: 13px; text-align: left; }
+  .tbl-admins td:nth-child(1) { grid-area: 1 / 1 / 2 / 3; font-size: 14.5px; }
+  .tbl-admins td:nth-child(6) { grid-area: 5 / 1 / 6 / 3; white-space: normal !important; }
+  .tbl-admins td:nth-child(2)::before { content: '角色 '; color: var(--text-mute); font-size: 12px; }
+  .tbl-admins td:nth-child(3)::before { content: '状态 '; color: var(--text-mute); font-size: 12px; }
+  .tbl-admins td:nth-child(4)::before { content: '最近登录 '; color: var(--text-mute); font-size: 12px; }
+  .tbl-admins td:nth-child(5)::before { content: '创建者 '; color: var(--text-mute); font-size: 12px; }
+  .tbl-admins td:nth-child(4), .tbl-admins td:nth-child(5) { grid-column: 1 / 3; }
+  .drill-row .drill-code { padding-left: 8px; }
+}

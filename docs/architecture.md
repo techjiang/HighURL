@@ -542,6 +542,52 @@ CREATE TABLE reports (id, code, reason, note, ip, ua, status, created_at, handle
 `landingLogoUrl` 走白名单校验（站内绝对路径或 http(s)），因为它会被直接拼进
 `<img src>`——放过 `javascript:` 就等于给建页开了一个注入口子。
 
+### v11：账号从「一个管理员」变成「几个人」
+
+```sql
+ALTER TABLE admins ADD COLUMN role       TEXT NOT NULL DEFAULT 'owner';
+ALTER TABLE admins ADD COLUMN created_by TEXT NOT NULL DEFAULT '';
+ALTER TABLE admins ADD COLUMN disabled_at INTEGER;
+```
+
+装完只有一个 `admin`，那是够用；一旦有人要「看数据但别动配置」，就只有两条路：
+把密码给出去，或者不给。前者等于权限失控，后者等于让人天天截图来问。
+
+**角色只分两档：`owner` 和 `viewer`。** 中间那档「能改短链但不能改系统设置」听着
+合理，实际问题在边界：能改短链就能把目标地址改到别处去——那已经是最高权限了。
+所以线画在「能不能写」上，能被一句话讲清，也不会用着用着长出第三种解释。
+不认识的 `role` 值一律按 `viewer` 处理，唯一安全的降权方向。
+
+写权限**在 `api()` 包装层统一拦**，不逐个路由判断。逐路由判就得每加一个写接口都
+想起来加一次，漏掉的那个不会报错，只会安静地允许只读账号改东西。
+`/admin/api/me` 与改自己密码走 `apiUnscoped`——只读账号也必须能改自己的口令。
+
+`verifySession` 每个请求都回库读 `role` 和 `disabled_at`，不信 Cookie 里的值。
+无状态 Cookie 发出去就收不回来，而「把某人降成只读」必须立刻生效，不能等 Cookie 过期。
+
+三个保护：
+
+- **最后一个 owner 不能被降级、停用或删除**。否则没人能再进账号页，只能回来改数据库。
+  命令行留了一条路：`highurl admin reset --username x --password y`。
+- **停用不是删除**。账号还在、审计日志的操作人还挂得住，随时能再打开。
+  停用后旧会话立即失效（同上，每请求查库）。
+- **停用的登录提示和密码错误完全一致**。同一个回复、同一句话，不确认用户名是否存在。
+
+前端在 `/admin/api/me` 拿到 `readonly` 后给 `body` 加 `readonly-account`，
+会写的按钮统一标 `data-writes` 由 CSS 置灰。这只是提前告知，不是权限——
+真正的闸在服务端。服务器返回的 403 没人想靠点击去发现。
+
+## 渠道漏斗为什么能下钻到短链
+
+按渠道看「曝光 4170、落地 851」之后，下一个问题一定是「哪个渠道的哪条链在漏」。
+所以点渠道名就地展开，列出这个渠道下的短链，按「没进去」倒序——人多却没往下走的排最前。
+
+**下钻时曝光和落地两边都按同一个 `host` 过滤。** 只过滤一边会造出一个看着精确、
+实际错的落点率：分子是这条链在所有渠道的落地数，分母是它在这个渠道的曝光数，
+算出来能超过 100%。这类错误最难发现，因为界面上它长得很正常。
+
+就地展开而不跳页，是因为复盘时答案要和问题同屏——点进去再点回来，人就不看了。
+
 ## 备份恢复为什么收进一个 service
 
 管理台的 `/admin/api/restore` 和命令行的 `highurl restore` 早期是两份实现，结果各自漏东西：

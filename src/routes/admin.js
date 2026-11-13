@@ -8,7 +8,7 @@ import { renderLogin, renderInstall, renderAdminShell } from '../pages/admin.js'
 import { serialize, statsFor, overviewStats } from './api.js';
 import { shortUrl } from './public.js';
 import { checkOrigin } from './public.js';
-import { SESSION_COOKIE } from '../services/auth.js';
+import { SESSION_COOKIE, canWrite, normalizeRole } from '../services/auth.js';
 import { detectFormat, parseByFormat, planImport, applyImport } from '../services/migrate.js';
 import { compileRule } from '../services/ua-filter.js';
 import { parseQrStyle } from '../services/qr-style.js';
@@ -19,7 +19,7 @@ import { buildQrSheetPdf, sheetStyleFromQuery } from '../services/qr-sheet.js';
 import { GroupService } from '../services/groups.js';
 import { normalizeTags } from '../services/links.js';
 import { serializeTarget } from '../services/targets.js';
-import { funnelRows, funnelSummary } from '../services/funnel.js';
+import { funnelRows, funnelSummary, hostDrilldown } from '../services/funnel.js';
 import { maskIp } from '../services/stream.js';
 import { buildDigest } from '../services/insights.js';
 import { inspectBackup, restoreBackup } from '../services/restore.js';
@@ -113,14 +113,46 @@ export function registerAdminRoutes(router, ctx) {
   });
 
   // ---------- 管理 API ----------
+  /**
+   * 只读账号的写请求在这里统一拦掉，而不是在每个路由里各写一次。
+   * 逐个路由判断迟早会漏一个——漏的那个还偏偏不会报错，只是默默地写进去了。
+   * 返回 403 时带上 `readonly` 标记，前端据此把按钮置灰而不是等点击后才报错。
+   */
+  function assertWritable(req, me) {
+    if (req.method === 'GET' || req.method === 'HEAD') return;
+    if (canWrite(me)) return;
+    throw new HttpError(403, '当前账号为只读权限，不能修改', 'readonly');
+  }
+
   const api = async (req, res, fn) => {
+    const me = requireSession(req);
+    assertWritable(req, me);
+    if (req.method !== 'GET') checkOrigin(req, settings.get('baseUrl'));
+    const data = await fn(me, req);
+    sendJson(res, 200, { ok: true, ...data });
+  };
+
+  /**
+   * 不套写权限的路由，只给「改自己密码」这类本人事务用。
+   * 签名上就带着这条豁免，比在每个 fn 里再判断一次更不容易忘。
+   */
+  const apiUnscoped = async (req, res, fn) => {
     const me = requireSession(req);
     if (req.method !== 'GET') checkOrigin(req, settings.get('baseUrl'));
     const data = await fn(me, req);
     sendJson(res, 200, { ok: true, ...data });
   };
 
-  router.get('/admin/api/me', (req, res) => api(req, res, (me) => ({ result: { username: me.username, baseUrl: settings.get('baseUrl') } })));
+  router.get('/admin/api/me', (req, res) =>
+    api(req, res, (me) => ({
+      result: {
+        username: me.username,
+        role: me.role || 'owner',
+        readonly: !canWrite(me),
+        baseUrl: settings.get('baseUrl'),
+      },
+    })),
+  );
 
   router.get('/admin/api/overview', (req, res) =>
     api(req, res, () => {
@@ -702,10 +734,97 @@ export function registerAdminRoutes(router, ctx) {
             return { views, clicks, rate: views ? clicks / views : null };
           })()
         : funnelSummary(store);
-      return { result: { code: link ? link.code : null, summary, rows } };
+      // 下钻：?host=news.example 时给出这个渠道下每条短链各自的曝光与落地。
+      // 两边的数都按同一个渠道过滤，否则算出来的是跨渠道混出来的比例
+      const host = String(q.get('host') || '').trim();
+      const drill = host ? hostDrilldown(store, host) : null;
+      return { result: { code: link ? link.code : null, summary, rows, host, drill } };
     }),
   );
 
+  /**
+   * 账号管理。
+   *
+   * 全部走 owner 判定，不看 `api()` 里那层「能写就行」——
+   * viewer 改不了数据，但也不该能给自己提权。这一层的判断必须比写权限更严。
+   */
+  const requireOwner = (me) => {
+    if (!canWrite(me)) throw new HttpError(403, '只有管理员能做这个操作', 'owner_only');
+    return me;
+  };
+
+  /**
+   * 改自己的密码。放在 requireOwner 之外：只读账号也得能换掉自己的口令。
+   * 但 api() 那层的「写请求要 owner」会挡住它，所以这条走 apiUnscoped。
+   */
+  router.post('/admin/api/admins/self/password', (req, res) =>
+    apiUnscoped(req, res, async (me) => {
+      const body = await parseJsonBody(req, ctx.config.maxBodyBytes);
+      auth.changePassword(me.id, body.oldPassword, body.newPassword);
+      return { result: { ok: true } };
+    }),
+  );
+
+  router.get('/admin/api/admins', (req, res) =>
+    api(req, res, (me) => {
+      requireOwner(me);
+      return { result: { items: auth.listAdmins(), me: { id: me.id, username: me.username, role: me.role || 'owner' } } };
+    }),
+  );
+
+  router.post('/admin/api/admins', (req, res) =>
+    api(req, res, async (me) => {
+      requireOwner(me);
+      const body = await parseJsonBody(req, ctx.config.maxBodyBytes);
+      const created = auth.createAdmin(body.username, body.password, {
+        role: normalizeRole(body.role === 'owner' ? 'owner' : 'viewer'),
+        createdBy: me.username,
+      });
+      links.audit(me.username, 'admin.create', `${created.username}:${created.role}`);
+      return { result: created };
+    }),
+  );
+
+  router.post('/admin/api/admins/:id/role', (req, res, params) =>
+    api(req, res, async (me) => {
+      requireOwner(me);
+      const body = await parseJsonBody(req, ctx.config.maxBodyBytes);
+      const out = auth.setRole(Number(params.id), normalizeRole(body.role), me.username);
+      return { result: out };
+    }),
+  );
+
+  router.post('/admin/api/admins/:id/state', (req, res, params) =>
+    api(req, res, async (me) => {
+      requireOwner(me);
+      const body = await parseJsonBody(req, ctx.config.maxBodyBytes);
+      const id = Number(params.id);
+      // 把自己停用等于当场把自己锁在门外，这种「手滑」不该靠用户自己避免
+      if (id === me.id && body.disabled) throw new HttpError(400, '不能停用当前登录的账号', 'self_disable');
+      const out = auth.setDisabled(id, Boolean(body.disabled), me.username);
+      return { result: out };
+    }),
+  );
+
+  router.post('/admin/api/admins/:id/password', (req, res, params) =>
+    api(req, res, async (me) => {
+      requireOwner(me);
+      const body = await parseJsonBody(req, ctx.config.maxBodyBytes);
+      auth.changePassword(Number(params.id), '', body.password, { reset: true, actor: me.username });
+      return { result: { ok: true } };
+    }),
+  );
+
+  router.delete('/admin/api/admins/:id', (req, res, params) =>
+    api(req, res, (me) => {
+      requireOwner(me);
+      const id = Number(params.id);
+      if (id === me.id) throw new HttpError(400, '不能删除当前登录的账号', 'self_delete');
+      return { result: auth.removeAdmin(id, me.username) };
+    }),
+  );
+
+  /** 修改自己的密码：只读账号也要能改，所以不走 requireOwner */
   /** 举报队列：列表 + 处理结论。举报只报告，不自动停链 */
   router.get('/admin/api/reports', (req, res) =>
     api(req, res, () => {

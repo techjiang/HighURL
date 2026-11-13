@@ -70,6 +70,7 @@ const ICON = {
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>',
   funnel: '<path d="M4 5h16l-6 7v6l-4 2v-8z"/>',
   report: '<path d="M12 4l8 15H4zM12 10v4M12 16.5v.5"/>',
+  accounts: '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c0-3 2.5-5 5.5-5s5.5 2 5.5 5M17 11.5a2.6 2.6 0 1 0 0-5.2M17.5 14.5c2 .5 3.5 2.3 3.5 4.5"/>',
 };
 
 const NAV = [
@@ -86,6 +87,7 @@ const NAV = [
   ['audit', '审计日志'],
   ['backup', '备份恢复'],
   ['trash', '回收站'],
+  ['accounts', '账号'],
   ['settings', '系统设置'],
 ];
 
@@ -101,7 +103,7 @@ export function renderAdminShell(ctx, me) {
     <nav>${nav}</nav>
     <div class="side-foot">
       <span class="row"><span class="dot" style="width:6px;height:6px;border-radius:50%;background:#34d399"></span> v${escapeHtml(ctx.version || '0.0.0')}</span>
-      <span class="truncate">${escapeHtml(me.username)}</span>
+      <span class="truncate">${escapeHtml(me.username)}${me.role === 'viewer' ? '<span class="tag" style="margin-left:6px">只读</span>' : ''}</span>
       <form method="post" action="/logout"><button class="btn btn-ghost btn-sm" type="submit" style="width:100%">退出登录</button></form>
     </div>
   </aside>
