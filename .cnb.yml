@@ -1,0 +1,46 @@
+# HighURL 流水线：提交跑测试，PR 跑测试，打 Tag 时构建并推送镜像
+main:
+  push:
+    - name: test
+      docker:
+        image: node:22
+      stages:
+        - name: 环境自检
+          script: |
+            node -v
+            node src/cli.js doctor --data /tmp/highurl-ci
+        - name: 单元与集成测试
+          script: |
+            node --test
+        - name: 跳转压测冒烟
+          script: |
+            node scripts/bench.js --links 100 --conns 32 --duration 3
+
+  pull_request:
+    - name: test
+      docker:
+        image: node:22
+      stages:
+        - name: 单元与集成测试
+          script: |
+            node --test
+
+$:
+  tag_push:
+    - name: release
+      services:
+        - docker
+      stages:
+        - name: 测试
+          script: |
+            node --test
+        - name: 构建并推送镜像
+          script: |
+            set -e
+            IMAGE="${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}"
+            TAG="${CNB_BRANCH}"
+            echo "$CNB_TOKEN" | docker login "$CNB_DOCKER_REGISTRY" -u cnb --password-stdin
+            docker build -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
+            docker push "$IMAGE:$TAG"
+            docker push "$IMAGE:latest"
+            echo "已推送 $IMAGE:$TAG"

@@ -1,0 +1,27 @@
+services:
+  highurl:
+    build: .
+    image: ghcr.io/sleepyheade/highurl:latest
+    container_name: highurl
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      # 换成你自己的域名，影响短链拼接与分享卡片
+      HIGHURL_BASE_URL: https://s.example.com
+      HIGHURL_SITE_NAME: HighURL
+      # 放在 Nginx / Caddy 后面时打开，否则拿不到真实 IP
+      HIGHURL_TRUST_PROXY: "true"
+      HIGHURL_LOG_LEVEL: info
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

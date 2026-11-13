@@ -1,0 +1,37 @@
+{
+  "name": "highurl",
+  "version": "1.14.0",
+  "description": "HighURL - 高性能、零依赖、开箱即用的自托管短链接系统",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "bin": {
+    "highurl": "src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js serve",
+    "dev": "node --watch src/cli.js serve",
+    "test": "node --test",
+    "bench": "node scripts/bench.js",
+    "icons": "node scripts/gen-icons.js"
+  },
+  "keywords": [
+    "short-url",
+    "url-shortener",
+    "self-hosted",
+    "sqlite",
+    "high-performance"
+  ],
+  "license": "MIT",
+  "files": [
+    "src",
+    "public",
+    "assets",
+    "docs",
+    "scripts"
+  ],
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2"
+  }
+}

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="HighURL">
+  <title>HighURL</title>
+  <defs>
+    <linearGradient id="bd-bg" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#191238"/>
+      <stop offset="1" stop-color="#0A0A1C"/>
+    </linearGradient>
+    <linearGradient id="bd-body" x1="26" y1="42" x2="78" y2="92" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A78BFA"/>
+      <stop offset="1" stop-color="#5B8BFF"/>
+    </linearGradient>
+    <linearGradient id="bd-tip" x1="55" y1="33" x2="91" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#5B8BFF"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="30" fill="url(#bd-bg)"/>
+  <g transform="translate(24 24) scale(0.8333)" fill="none" stroke-width="10.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M17 37V75" stroke="url(#bd-body)"/>
+    <path d="M17 57H61" stroke="url(#bd-body)"/>
+    <path d="M61 75V41" stroke="url(#bd-body)"/>
+    <path d="M43 39 61 21 79 39" stroke="url(#bd-tip)"/>
+  </g>
+</svg>

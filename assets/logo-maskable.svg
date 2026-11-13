@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="HighURL">
+  <title>HighURL</title>
+  <defs>
+    <linearGradient id="mk-bg" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#191238"/>
+      <stop offset="1" stop-color="#0A0A1C"/>
+    </linearGradient>
+    <linearGradient id="mk-body" x1="32" y1="48" x2="72" y2="86" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A78BFA"/>
+      <stop offset="1" stop-color="#5B8BFF"/>
+    </linearGradient>
+    <linearGradient id="mk-tip" x1="55" y1="41" x2="83" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#5B8BFF"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" fill="url(#mk-bg)"/>
+  <g transform="translate(31 31) scale(0.6875)" fill="none" stroke-width="10.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M17 37V75" stroke="url(#mk-body)"/>
+    <path d="M17 57H61" stroke="url(#mk-body)"/>
+    <path d="M61 75V41" stroke="url(#mk-body)"/>
+    <path d="M43 39 61 21 79 39" stroke="url(#mk-tip)"/>
+  </g>
+</svg>
