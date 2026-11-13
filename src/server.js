@@ -23,6 +23,7 @@ import { TargetService } from './services/targets.js';
 import { VisitStream } from './services/stream.js';
 import { HistoryService } from './services/history.js';
 import { NotifyService } from './services/notify.js';
+import { DigestPusher } from './services/digest-push.js';
 
 import { createRedirectHandler, handlePasswordSubmit, handleReportSubmit, verifyAccess, accessCookie } from './routes/redirect.js';
 import { ReportBox } from './services/reports.js';
@@ -92,6 +93,9 @@ export async function createServer(options = {}) {
   // 通知服务要在巡检之前建好：巡检、举报、备份失败都要往它这儿发事件
   const notify = new NotifyService({ store, settings, logger });
   const health = new HealthChecker({ store, settings, logger, notify });
+  // 摘要推送依赖通知服务：它不直接发 HTTP，只往 notify 里塞一条事件，
+  // 事件订阅、静默时段、退避重试、投递留底这些都复用同一套
+  const digestPush = new DigestPusher({ store, settings, notify, logger });
   const stream = new VisitStream();
   // 历史服务要能失效跳转缓存：回滚之后缓存里的旧链接必须立刻不可见
   history.cache = cache;
@@ -117,6 +121,7 @@ export async function createServer(options = {}) {
     stream,
     history,
     notify,
+    digestPush,
     limiter,
     createLimiter,
     secret,

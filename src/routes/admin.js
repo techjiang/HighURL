@@ -203,6 +203,46 @@ export function registerAdminRoutes(router, ctx) {
     }),
   );
 
+  /**
+   * 定期摘要：预览 + 立即推送。
+   *
+   * 预览和真正推出去的内容必须是同一份格式化结果——「预览好看、收到是另一段」
+   * 是最没意义的预览。所以两边都走 DigestPusher.build()。
+   */
+  router.get('/admin/api/digest/push', (req, res) =>
+    api(req, res, () => {
+      const q = new URL(req.url, 'http://x').searchParams;
+      // 没带 days 就交给设置里的窗口，别把「没传」当成「1 天」——
+      // 周报会被悄悄压成日报
+      const raw = Number(q.get('days'));
+      const days = Number.isFinite(raw) && raw >= 1 ? Math.min(30, Math.floor(raw)) : undefined;
+      const built = ctx.digestPush.build({ windowDays: days });
+      return {
+        result: {
+          kind: ctx.settings.get('digestPushKind'),
+          hour: ctx.settings.get('digestPushHour'),
+          windowDays: built.windowDays,
+          nextRunAt: ctx.digestPush.nextRun(),
+          title: built.title,
+          text: built.text,
+          counts: built.digest.counts,
+          items: built.digest.items,
+          hot: built.digest.hot,
+          kinds: built.kinds,
+        },
+      };
+    }),
+  );
+
+  /** 立即推一次：不等到点，但仍尊重渠道订阅与静默时段 */
+  router.post('/admin/api/digest/push', (req, res) =>
+    api(req, res, (me) => {
+      const out = ctx.digestPush.push({ force: true });
+      links.audit(me.username, 'digest.push', out.slot || '');
+      return { result: out };
+    }),
+  );
+
   /** 热点短链：最近 N 小时新增点击最多的一批，带窗口内曝光 */
   router.get('/admin/api/hot', (req, res) =>
     api(req, res, () => {

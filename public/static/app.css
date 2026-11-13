@@ -156,7 +156,10 @@ label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row { display: flex; align-items: center; gap: 10px; }
 .spacer { flex: 1; }
-.stack { display: grid; gap: 16px; }
+.stack { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+/* 网格项默认 min-width:auto，卡片里一有不受换行约束的内容（比如推送预览那段 <pre>）
+   就会把整列顶宽，窄屏下整页跟着横向滚动。显式压到 0，让 overflow 自己兜住 */
+.stack > * { min-width: 0; }
 
 /* ---------- 消息页 ---------- */
 .page-msg { display: grid; place-items: center; padding: 24px; }
@@ -332,6 +335,8 @@ td .cell-url { color: var(--text-mute); font-size: 12.5px; max-width: 340px; ove
 .kv dd { margin: 0; word-break: break-all; }
 
 .code-block { font-family: var(--mono); font-size: 12.5px; background: rgba(6, 7, 16, .85); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow-x: auto; color: #c9d3f5; white-space: pre; }
+/* 推送正文是散文而不是代码：让它自己换行，别在手机上被切成横向滚动的一条 */
+.digest-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .split { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); align-items: start; }
 /* 分组页左边是表格，给它更多宽度，右边的表单够放就行 */
 .split-groups { grid-template-columns: minmax(0, 1.9fr) minmax(270px, 0.85fr); }

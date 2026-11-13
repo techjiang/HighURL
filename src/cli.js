@@ -22,6 +22,7 @@ const HELP = `HighURL ${pkg.version} · 高性能自托管短链接系统
   highurl restore <文件>     从 JSON 备份恢复 [--replace --yes] [--dry-run] [--force]
   highurl migrate <文件>     导入 YOURLS dump / HighURL 备份 / CSV
   highurl stats              查看统计
+  highurl digest [--days 1]  在终端看运营摘要（--push 顺带推到通知渠道）
   highurl expiring [--days 7] 列出即将到期的短链
   highurl admin [list]       账号列表
   highurl admin add --username x --password y [--role owner|viewer]
@@ -324,6 +325,30 @@ async function cmdExpiring(args) {
   ctx.store.close();
 }
 
+/**
+ * 终端里的运营摘要。
+ *
+ * 存在的理由和 `expiring` 一样：晨会前想一眼看完昨天，人可能正 ssh 在服务器上。
+ * `--push` 则给了「现在就想发一次」的入口，走的是和定时任务完全同一条路径，
+ * 包括静默时段与渠道订阅——手动推不该绕过这些。
+ */
+async function cmdDigest(args) {
+  const ctx = openContext(args);
+  const { DigestPusher } = await import('./services/digest-push.js');
+  const { NotifyService } = await import('./services/notify.js');
+  const notify = new NotifyService({ store: ctx.store, settings: ctx.settings });
+  const pusher = new DigestPusher({ store: ctx.store, settings: ctx.settings, notify });
+  const days = args.days ? Math.max(1, Math.min(30, Number(args.days) || 1)) : undefined;
+  const built = pusher.build({ windowDays: days });
+  console.log(built.text);
+  if (args.push) {
+    const out = pusher.push({ force: true });
+    if (out.pushed) console.log(`\n已推送到 ${out.pushed} 个渠道`);
+    else console.log('\n没有可推送的渠道（检查「事件通知」页是否配了渠道并订阅了「运营摘要（定期）」）');
+  }
+  ctx.store.close();
+}
+
 async function cmdDoctor(args) {
   const checks = [];
   const add = (ok, label, detail = '') => checks.push({ ok, label, detail });
@@ -414,6 +439,7 @@ const commands = {
   migrate: cmdMigrate,
   stats: cmdStats,
   expiring: cmdExpiring,
+  digest: cmdDigest,
   doctor: cmdDoctor,
 };
 

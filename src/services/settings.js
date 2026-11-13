@@ -29,6 +29,8 @@ const CAST = {
   notifyDedupeHours: Number,
   notifyExpireDays: Number,
   notifyAllowPrivate: Boolean,
+  digestPushHour: Number,
+  digestPushWindowDays: Number,
   port: Number,
 };
 
@@ -157,6 +159,17 @@ export class Settings {
       case 'notifyExpireDays': {
         const n = Number(str);
         return Number.isFinite(n) && n >= 1 && n <= 90 ? Math.floor(n) : undefined;
+      }
+      case 'digestPushKind': {
+        return ['off', 'daily', 'weekly'].includes(str) ? str : undefined;
+      }
+      case 'digestPushHour': {
+        const n = Number(str);
+        return Number.isInteger(n) && n >= 0 && n <= 23 ? n : undefined;
+      }
+      case 'digestPushWindowDays': {
+        const n = Number(str);
+        return Number.isInteger(n) && n >= 1 && n <= 30 ? n : undefined;
       }
       case 'retentionDays': {
         const n = Number(str);

@@ -26,6 +26,9 @@ export const EVENTS = {
   'link.expiring': '短链即将到期',
   'report.new': '收到新的举报',
   'backup.failed': '自动备份失败',
+  // 定期摘要不是「出事」，是「到点汇报」。区分开是因为订阅时心态不同：
+  // 前四个是值班要看的，这一个是想每天看一眼大盘
+  'digest.periodic': '运营摘要（定期）',
 };
 
 const EVENT_KEYS = Object.keys(EVENTS);
@@ -221,7 +224,7 @@ export class NotifyService {
    * 发出一个事件。**永远不抛异常**：调用方是巡检、举报、备份这些主流程，
    * 一个 webhook 挂了不该把它们的活一起带下水，最多是少收到一条通知。
    */
-  emit(event, { subject = '', title = '', text = '', link = '', data = {} } = {}) {
+  emit(event, { subject = '', title = '', text = '', link = '', data = {}, dedupe = true } = {}) {
     try {
       if (!EVENT_KEYS.includes(event)) return 0;
       const channels = this.listChannels({ withSecret: true }).filter((c) => c.enabled && c.events.includes(event));
@@ -239,7 +242,9 @@ export class NotifyService {
       };
       let queued = 0;
       for (const channel of channels) {
-        if (this.recentlyDelivered(channel, event, subject)) continue;
+        // 定期摘要这类「到点汇报」允许跳过去重：手动点一次「立即推送」
+        // 却被去重窗口吞掉，人只会以为按钮坏了
+        if (dedupe && this.recentlyDelivered(channel, event, subject)) continue;
         const quiet = channel.quiet || {};
         // 静默期内：先判断这条事件是不是允许穿透（备份失败这类等到早上已经晚了）
         if (inQuietHours(quiet.from, quiet.to) && !(quiet.pierce || []).includes(event)) {

@@ -2824,6 +2824,11 @@ const ACTION_LABEL = {
   'auth.login': '登录',
   'auth.login_failed': '登录失败',
   'auth.password_change': '修改密码',
+  'digest.push': '手动推送摘要',
+  'notify.channel_create': '新建通知渠道',
+  'notify.channel_update': '修改通知渠道',
+  'notify.channel_delete': '删除通知渠道',
+  'notify.retry': '重发通知',
 };
 
 async function viewAudit(root) {
@@ -3541,11 +3546,13 @@ const EVENT_LABEL = {
   'link.expiring': '短链即将到期',
   'report.new': '收到新的举报',
   'backup.failed': '自动备份失败',
+  'digest.periodic': '运营摘要（定期）',
   // 静默结束时合并出来的摘要，不是可以订阅的事件，但投递记录里会出现
   digest: '静默汇总',
 };
 const DELIVERY_LABEL = { success: '已送达', failed: '失败', retry: '重试中', pending: '排队中', held: '静默待发', dropped: '静默未发' };
 const QUIET_POLICY_LABEL = { digest: '攒着，结束后合并补发', drop: '静默期内不发' };
+const DIGEST_KIND_LABEL = { off: '关闭', daily: '每天推一次', weekly: '每周一推一次' };
 
 /**
  * 投递记录的「状态码 × 次数」那一列。
@@ -3568,6 +3575,9 @@ async function viewNotify(root) {
   const del = await api('/admin/api/notify/deliveries?limit=12');
   const channels = result.items;
   const health = del.result.counts;
+  // 定期摘要的配置和预览：预览用的就是真发出去的那段文本，
+  // 不然「预览挺好看、收到是另一段」的预览没有意义
+  const digest = await api('/admin/api/digest/push').then((r) => r.result).catch(() => null);
 
   const eventChips = (channel) =>
     channel.events.map((e) => `<span class="tag">${esc(EVENT_LABEL[e] || e)}</span>`).join(' ');
@@ -3611,6 +3621,38 @@ async function viewNotify(root) {
         .join('')
     : `<tr><td colspan="7"><div class="empty"><b>还没有投递记录</b><span class="muted">加上渠道、点一次测试就有了</span></div></td></tr>`;
 
+  const digestCard = digest
+    ? `<section class="card">
+      <div class="card-head"><h2>定期摘要</h2>
+        <span class="tag ${digest.kind === 'off' ? '' : 'tag-ok'}">${digest.kind === 'off' ? '已关闭' : esc(DIGEST_KIND_LABEL[digest.kind] || digest.kind)}</span>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost btn-sm" id="digest-push" data-writes>立即推送一次</button>
+      </div>
+      <div class="card-body">
+        <div class="field-row">
+          <div class="field"><label>频率</label>
+            <select id="digest-kind">
+              ${Object.entries(DIGEST_KIND_LABEL).map(([k, l]) => `<option value="${k}" ${digest.kind === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}
+            </select>
+            <p class="hint">订阅了「运营摘要（定期）」的渠道才会收到；静默时段照样生效，不绕过去</p>
+          </div>
+          <div class="field"><label>推送时间（小时，服务器本地）</label>
+            <input id="digest-hour" type="number" min="0" max="23" value="${digest.hour}">
+            <p class="hint">${digest.nextRunAt ? `下次推送 ${esc(fmtDate(digest.nextRunAt))}` : '当前已关闭'}</p>
+          </div>
+          <div class="field"><label>统计窗口（天）</label>
+            <input id="digest-days" type="number" min="1" max="30" value="${digest.windowDays}">
+            <p class="hint">周报默认 7 天；1 天表示「和昨天比」</p>
+          </div>
+        </div>
+        <div class="field"><label>推送内容预览</label>
+          <pre class="code-block digest-text" id="digest-preview">${esc(digest.text)}</pre>
+          <p class="hint">这段文本和真正发出去的一字不差，只是把渠道换成了这里</p>
+        </div>
+      </div>
+    </section>`
+    : '';
+
   root.innerHTML = `
   <div class="topbar"><div><h1>事件通知</h1><div class="sub">事情发生时主动推给你，不用一直盯着这一页</div></div>
     <span class="spacer"></span>
@@ -3619,6 +3661,7 @@ async function viewNotify(root) {
   </div>
 
   <div class="stack">
+    ${digestCard}
     <section class="card">
       <div class="card-head"><h2>推送渠道</h2><span class="tag">${num(channels.length)} 个</span></div>
       <div class="table-wrap"><table class="tbl-notify channels">
@@ -3648,6 +3691,48 @@ async function viewNotify(root) {
       </div>
     </section>
   </div>`;
+
+  if (digest) {
+    // 频率 / 小时 / 窗口三项改动立刻落设置：它们是纯配置，
+    // 混在「保存」按钮里反而容易忘存
+    const saveDigest = async () => {
+      const body = {
+        digestPushKind: $('#digest-kind').value,
+        digestPushHour: Number($('#digest-hour').value),
+        digestPushWindowDays: Number($('#digest-days').value),
+      };
+      try {
+        const out = await api('/admin/api/settings', { method: 'PATCH', body });
+        if (out.rejected?.length) toast(`忽略无效项：${out.rejected.join(',')}`, 'err');
+        else toast('定期摘要设置已保存', 'ok');
+        render();
+      } catch (err) {
+        toast(err.message, 'err');
+      }
+    };
+    $('#digest-kind').addEventListener('change', saveDigest);
+    $('#digest-hour').addEventListener('change', saveDigest);
+    $('#digest-days').addEventListener('change', saveDigest);
+    $('#digest-push').addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      try {
+        const { result: r } = await api('/admin/api/digest/push', { method: 'POST' });
+        // pushed 为 0 时要说清为什么没发：渠道没订阅 / 静默中 / 没事件，
+        // 这三种「点了没反应」的原因完全不同
+        // 「入队」和「真发出去」不是一回事：静默中的渠道会挂起等到点补发，
+        // 只说一句「已推送 2 个渠道」会让人以为手机上都收到了
+        const d = r.detail || { queued: 0, held: 0 };
+        if (d.queued && d.held) toast(`已投递 ${d.queued} 个渠道，${d.held} 个静默中（结束后补发）`, 'ok');
+        else if (d.queued) toast(`已投递到 ${d.queued} 个渠道`, 'ok');
+        else if (d.held) toast(`${d.held} 个渠道正在静默，已挂起，结束后补发`, 'ok');
+        else toast('没有渠道接收：检查渠道是否订阅了「运营摘要（定期）」', 'err');
+        render();
+      } catch (err) {
+        toast(err.message, 'err');
+        e.target.disabled = false;
+      }
+    });
+  }
 
   const channelForm = (channel) => {
     const picked = new Set(channel?.events || []);

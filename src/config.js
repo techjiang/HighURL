@@ -56,6 +56,13 @@ const DEFAULTS = {
   // 允许把通知推到内网地址。默认关：接收端地址是管理员填的，
   // 但一个填错的地址不该让本站变成探测内网的跳板；自建接收端再明确打开
   notifyAllowPrivate: false,
+  // 定期摘要推送：off / daily / weekly。默认关——通知渠道配好之后
+  // 主动往人手机上推「今天怎么样」是能力，不是义务
+  digestPushKind: 'off',
+  // 摘要几点推（服务器本地时间，0–23）。默认 9 点：早上一眼看完昨天的数
+  digestPushHour: 9,
+  // 摘要窗口天数，1–30。日报默认 1 天，周报默认 7 天（这时本项不生效）
+  digestPushWindowDays: 1,
 };
 
 const ENV_MAP = {

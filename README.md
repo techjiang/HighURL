@@ -256,6 +256,7 @@
 | 数据自检 | 一眼看孤儿统计、短码冲突、数据库版本，确认无误再一键清理 |
 | 事件通知 | 死链、举报、即将到期、备份失败这四件事发生时，主动推到你手上，不用一直盯着管理台。支持通用 Webhook（带 HMAC 签名）、Slack、飞书、钉钉；同一件事在窗口内只推一次，到期提醒合成每日一条汇总；发失败按 5 秒、30 秒退避重试两次，三次都失败就留底等人看，不无限重试 |
 | 静默时段 | 每个渠道可单独设一段不打扰的时间（如 22:00–08:00，跨夜直接写），期间通知先挂起不丢，结束后按渠道合成一条摘要补发；也可以选「直接不发」并留痕。备份失败这类等不得的事件可按事件穿透 |
+| 定期摘要 | 每天（或每周一）到点把「本期要点」推一次：涨跌、落点率变化、待处理几件事，一段话看完，不用挨着页面点。内容和概览页那一段同源；默认关，开了才推；没点击也没待办时不打扰人；手动「立即推送一次」仍然遵守渠道订阅与静默时段 |
 | 可观测 | `/health` 健康检查、`/metrics` Prometheus 指标，含去重跳过数 |
 | 零依赖部署 | 单进程 + 单文件，无 Redis、无 MySQL、无构建步骤 |
 
@@ -443,7 +444,7 @@ curl https://s.example.com/admin/api/notify/deliveries?limit=50       # 投递�
 curl -X POST https://s.example.com/admin/api/notify/deliveries/12/retry  # 手动重发
 ```
 
-`events` 只认 `link.dead`、`link.expiring`、`report.new`、`backup.failed`。
+`events` 只认 `link.dead`、`link.expiring`、`report.new`、`backup.failed`、`digest.periodic`。
 配了 `secret` 之后，每个请求带 `X-HighURL-Signature: sha256=<hmac>` 与
 `X-HighURL-Timestamp`，签名内容是 `<timestamp>.<body>`，接收端按同样方式算一遍即可验签，
 顺便拒绝时间戳过旧的请求防重放。举报通知只带短码与类型，**不带匿名正文**。
@@ -455,6 +456,18 @@ curl -X POST https://s.example.com/admin/api/notify/deliveries/12/retry  # 手�
 两个值相同等于没设。`quiet.policy` 取 `digest`（默认，结束后合并补发一条）或 `drop`
 （不发，但投递记录里留一条带原因的 `dropped`）；`quiet.pierce` 是静默期内照样放行的
 事件列表。返回的渠道对象带 `quietActive`，直接告诉你此刻是不是静默中。
+
+### 定期摘要
+
+```bash
+curl https://s.example.com/admin/api/digest/push        # 预览：下次推送时间 + 真正会发出去的那段文本
+curl -X POST https://s.example.com/admin/api/digest/push # 立即推一次（不管到没到点）
+```
+
+频率、推送小时、统计窗口在设置里（`digestPushKind` = `off` / `daily` / `weekly`，
+`digestPushHour` 0–23，`digestPushWindowDays` 1–30）。订阅了 `digest.periodic`
+的渠道才会收到；周报只在周一推。终端里也能看：`highurl digest --days 7`，
+加 `--push` 就顺带发一次。
 
 `landing.theme` 只认 `auto` / `dark` / `light`，其它值会回落到 `auto` 而不是原样写库；
 `qrStyle` 逐字段白名单校验，坏值直接 400，不会把一条短链的导出链路带坏。
@@ -473,6 +486,7 @@ highurl restore ./out.json [--replace --yes] [--dry-run] [--with-settings] [--fo
 highurl migrate yourls.sql [--overwrite] [--dry-run]   # 也认 .json 与 .csv
 highurl stats
 highurl expiring [--days 7] [--limit 200] [--code-only]   # 即将到期的短链
+highurl digest [--days 1] [--push]                       # 运营摘要，--push 同时推一次
 highurl doctor
 ```
 

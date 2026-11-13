@@ -16,6 +16,9 @@ export function startMaintenance(ctx) {
   // 静默期结束要补发。挂在 30s 心跳上没问题：releaseHeld 没东西可放时立刻返回，
   // 而且它自己会看「现在是否仍在静默期」，改时段后也不会提前放出来
   let quietBusy = false;
+  // 摘要推送同一分钟内可能被心跳撞两次，用忙碌位挡一下；
+  // 真正的幂等靠投递记录里那条 subject 槽位
+  let digestBusy = false;
 
   const tick = async () => {
     try {
@@ -28,6 +31,7 @@ export function startMaintenance(ctx) {
       maybeHealthCheck();
       maybeNotifyExpiring();
       releaseQuiet();
+      pushDigest();
     } catch (err) {
       logger.error('[maintenance]', err);
     }
@@ -177,6 +181,26 @@ export function startMaintenance(ctx) {
     }
   }
 
+  /**
+   * 定期摘要：到点把「本期要点」推一次。
+   *
+   * 挂在 30 秒心跳上，但真正决定推不推的是 tick() 里的三道闸：
+   * 是不是到了设定的小时、是不是该推的那天、这个槽位是不是已经推过。
+   * 推送失败由通知服务自己退避重试并留底，这里不吞也不重来。
+   */
+  function pushDigest() {
+    if (digestBusy || !ctx.digestPush?.tick) return { pushed: 0, skipped: 'absent' };
+    digestBusy = true;
+    try {
+      return ctx.digestPush.tick(new Date());
+    } catch (err) {
+      logger.warn?.('[digest] 推送失败', err?.message || err);
+      return { pushed: 0, skipped: 'error' };
+    } finally {
+      digestBusy = false;
+    }
+  }
+
   function cleanup() {
     const retention = Number(settings.get('retentionDays')) || 0;
     if (retention > 0) {
@@ -242,6 +266,7 @@ export function startMaintenance(ctx) {
     maybeHealthCheck,
     maybeNotifyExpiring,
     releaseQuiet,
+    pushDigest,
   };
 }
 
