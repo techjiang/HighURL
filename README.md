@@ -82,9 +82,13 @@
 | --- | --- |
 | ![备份恢复](docs/screenshots/backup.png) | ![校验不通过](docs/screenshots/backup-checksum.png) |
 
-| CSV 导入（分组按名字接回去） |
-| --- |
-| ![CSV 导入](docs/screenshots/csv-import.png) |
+| CSV 导入（分组按名字接回去） | 到期续约（批量 / 单条 / 永久） |
+| --- | --- |
+| ![CSV 导入](docs/screenshots/csv-import.png) | ![批量续期](docs/screenshots/renew-batch.png) |
+
+| 即将到期（三天内直接在行上标出来） | 单链统计里的有效期与「续期」 |
+| --- | --- |
+| ![即将到期](docs/screenshots/links-expiring.png) | ![单链到期](docs/screenshots/link-expiry.png) |
 
 </div>
 
@@ -95,6 +99,10 @@
 | 概览 | 短链 | 分组 |
 | --- | --- | --- |
 | ![移动端概览](docs/screenshots/mobile-dashboard.png) | ![移动端短链](docs/screenshots/mobile-links.png) | ![移动端分组](docs/screenshots/mobile-groups.png) |
+
+| 续期 | 回收站 | 来源分析 |
+| --- | --- | --- |
+| ![移动端续期](docs/screenshots/mobile-renew.png) | ![移动端回收站](docs/screenshots/mobile-trash.png) | ![移动端来源](docs/screenshots/mobile-sources.png) |
 
 | 回收站 | 来源分析 | 审计日志 |
 | --- | --- | --- |
@@ -202,6 +210,8 @@
 | 建页组织配置 | 组织名、Logo、免责声明、倒数提示一处设好全站共用，不用逐条填。Logo 只接受站内路径与 http(s)；倒数只是提示，页面不会自动跳走 |
 | 举报箱 | 名片页 `/<短码>+` 上可以提交举报（垃圾 / 钓鱼 / 恶意软件 / 违法 / 其它），进管理台队列由人核对，**不会自动停链**；同 IP 同短链一天一条，IP 只留网段 |
 | 死链巡检 | 按间隔探测目标地址，连续两次失败才判定死链；概览页看健康占比，死链一键筛出 |
+| 到期续约 | 单条或批量续期：往后推 N 天、统一改到一个日期、或设为永久有效。只动有效期一个字段，不会顺手覆盖别人刚改的标题和标签；过期后被自动停用的会恢复成过期前的状态，而本来就手动停用的保持停用 |
+| 即将到期 | 列表按「7 天内 / 30 天内 / 已过期」筛，三天内到期的行直接挂一枚 `N 天后到期`；概览「本期要点」把 7 天内到期的条数算进待处理项，点进去就是筛好的列表；`highurl expiring` 在终端里也能看 |
 | 过期回收 | 短链过期后按策略自动停用或删除，宽限期内还能救回来；也可手动一键回收 |
 | 回收站清理 | 可设置保留天数，到期自动彻底删除；默认 0 表示一直留着等人工处理 |
 | 二维码 | 每条短链实时生成二维码，可下载 SVG / PNG；批量打包成 ZIP（内含 `qr/<短码>.png` 与 `codes.csv` 对照表），单次上限 1000 条 |
@@ -325,7 +335,21 @@ curl -b 'highurl_session=...' https://s.example.com/admin/api/hot?hours=24&limit
 
 # 列表按热度筛 / 按最近热度排
 curl -b 'highurl_session=...' 'https://s.example.com/admin/api/links?heat=hot&sort=recent_desc'
+
+# 即将到期：7 天内要失效的，按剩余时间升序
+curl -b 'highurl_session=...' 'https://s.example.com/admin/api/expiring?days=7'
+
+# 续期：往后推 30 天 / 改到某个日期 / 永久有效
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"days":30}' https://s.example.com/api/v1/links/mylink/renew
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"expireAt":"2027-01-31"}' https://s.example.com/api/v1/links/mylink/renew
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"expireAt":null}' https://s.example.com/api/v1/links/mylink/renew   # 永久
 ```
+
+续期单独一个动词，不走 `PATCH {expireAt}`：PATCH 是全字段更新，只想延长期限的
+调用方得先把整条记录读出来再写回去，中途别人改的字段就被覆盖了。
 
 短链对象里带健康字段：`health`（`ok` / `warn` / `dead` / 空串表示没测过）、`health_code`、`health_at`、`health_error`。
 `GET /api/v1/links?health=dead` 直接筛死链。`targetCount` 大于 1 表示这条开了分流。
@@ -388,6 +412,7 @@ highurl verify  ./out.json                                  # 只校验，不写
 highurl restore ./out.json [--replace --yes] [--dry-run] [--with-settings] [--force]
 highurl migrate yourls.sql [--overwrite] [--dry-run]   # 也认 .json 与 .csv
 highurl stats
+highurl expiring [--days 7] [--limit 200] [--code-only]   # 即将到期的短链
 highurl doctor
 ```
 

@@ -52,6 +52,9 @@ export function normalizeTags(input) {
  */
 function parseExpire(input) {
   if (input === undefined || input === null || input === '' || input === 'never') return null;
+  // 只有字符串才可能是「纯数字日期」。数字类型直接当时间戳：
+  // 毫秒时间戳本身由 13 位数字组成，被当成年份解析会得到 Date.now() + 30 天 → NaN，
+  // 续期静默变成一个空操作，而这正是「续了期却发现链接还是过期」的那类问题
   if (typeof input === 'number' || /^\d+$/.test(String(input).trim())) {
     const n = Number(input);
     const ms = n < 1e11 ? n * 1000 : n; // 支持秒或毫秒时间戳
@@ -273,6 +276,93 @@ export class LinkService {
     this.store.sql.updateLinkPassword.run(pwd ? scrypt(pwd) : null, Date.now(), link.id);
     this.audit(actor, 'link.password', `${link.code}:${pwd ? 'set' : 'clear'}`);
     return this.store.sql.getLinkById.get(link.id);
+  }
+
+  /**
+   * 续期：把有效期往后推，或者改成永久。
+   *
+   * 为什么要单独一个入口而不是走 update：批量续期只该动 expire_at 一个字段。
+   * 走 update 意味着把 url / title / tags / group 一起重新提交一遍，
+   * 只要下拉框里拿到的是一份十秒前读出来的快照，就有覆盖别人改动的机会。
+   *
+   * 状态怎么办：过期后被自动停用的（status_before_expire 有值）恢复成过期前的样子；
+   * 本来就停用的保持停用。这两件事必须分开——把管理员自己关掉的链接
+   * 在续期时顺手打开，是比不续期更糟的结果。
+   */
+  renew(id, input = {}, { actor = 'admin' } = {}) {
+    const link = this.store.sql.getLinkById.get(Number(id));
+    if (!link) throw new HttpError(404, '短链不存在', 'link_not_found');
+    const now = Date.now();
+    // 只给了 days 的话，从现在起算。给的是 undefined 会走到 parseExpire 的
+    // 「永久」分支——「续 30 天」变成「改成永久」，是错得最安静的一种
+    const days = Number(input.days) || 0;
+    const given = input.expireAt ?? input.expire_at ?? input.until;
+    let expireAt;
+    if (given !== undefined) expireAt = parseExpire(given);
+    else if (days > 0) expireAt = now + days * 86400000;
+    else expireAt = null;
+    // 推到过去等于让它立刻再次过期，除了手滑没有别的解释
+    if (expireAt !== null && expireAt <= now) {
+      throw new HttpError(400, '新的有效期必须晚于当前时间', 'expire_in_past');
+    }
+    const restore = String(link.status_before_expire || '');
+    let status = link.status;
+    if (restore === 'active' || restore === 'disabled') {
+      status = restore;
+    } else if (expireAt === null && link.status === 'disabled' && link.expire_at && link.expire_at < now) {
+      // 老数据没有 status_before_expire（v10 之前被自动停用的）：
+      // 只在「确实已经过期、又改成永久」时恢复到启用，这是唯一能推断出意图的情形
+      status = 'active';
+    }
+    this.history?.record(link.id, { action: 'renew', actor });
+    this.store.sql.setLinkExpire.run(expireAt, status, now, link.id);
+    this.audit(actor, 'link.renew', `${link.code}:${expireAt ? new Date(expireAt).toISOString().slice(0, 10) : 'never'}`);
+    return this.store.sql.getLinkById.get(link.id);
+  }
+
+  /**
+   * 批量续期。days 往后推几天，或者 until 一个具体日期；不传两者就是「永久」。
+   *
+   * 以「现在」为基准而不是以原有效期为基础往后加：一批链接可能已经过期三天，
+   * 在过期时间上 +30 天得到的只是「过期了 27 天」，和运营者说的「再放一个月」不是一回事。
+   * 原有效期还在未来的，则从原有效期接着延，避免提前续期反而缩短了有效期。
+   */
+  renewMany(codes, input = {}, { actor = 'admin' } = {}) {
+    const list = Array.isArray(codes) ? codes.map(String) : [];
+    if (!list.length) throw new HttpError(400, '请先选择短链', 'empty_selection');
+    if (list.length > 500) throw new HttpError(400, '单次最多操作 500 条', 'too_many');
+    const now = Date.now();
+    const days = input.days === undefined || input.days === null || input.days === '' ? null : Number(input.days);
+    if (days !== null && (!Number.isFinite(days) || days <= 0)) {
+      throw new HttpError(400, 'days 必须是正数', 'bad_days');
+    }
+    const forever = !days && (input.expireAt === undefined || input.expireAt === null || input.expireAt === '');
+    const until = forever ? null : (days ? null : parseExpire(input.expireAt));
+    if (!forever && !days && until === null) {
+      throw new HttpError(400, '请给出 days、expireAt，或显式指定永久', 'bad_expire');
+    }
+    if (until !== null && until <= now) throw new HttpError(400, '新的有效期必须晚于当前时间', 'expire_in_past');
+
+    let affected = 0;
+    const missing = [];
+    this.store.tx(() => {
+      for (const code of list) {
+        const row = this.store.findLinkByCode(code);
+        if (!row) {
+          missing.push(code);
+          continue;
+        }
+        const base = row.expire_at && row.expire_at > now ? row.expire_at : now;
+        const next = days ? base + days * 86400000 : until;
+        this.history?.record(row.id, { action: 'renew', actor });
+        const restore = String(row.status_before_expire || '');
+        const status = restore === 'active' || restore === 'disabled' ? restore : row.status;
+        this.store.sql.setLinkExpire.run(next, status, Date.now(), row.id);
+        affected += 1;
+      }
+    });
+    this.audit(actor, 'link.batch_renew', `${affected} 条${forever ? ' → 永久' : ''}`);
+    return { affected, missing, forever, days: days || 0, until };
   }
 
   /**

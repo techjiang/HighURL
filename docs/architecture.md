@@ -104,6 +104,26 @@ handleRedirect(code) → 判定该跳转确实成立之后
 `sweepExpired()` 挂在 maintenance 的定时任务上，也可以在短链页手动点「回收过期」触发。
 宽限期从 `expire_at` 起算，给误设有效期留一段补救时间。每次回收写一条 `link.expire_sweep` 审计。
 
+### 到期续约
+
+过期最容易出的事不是「数据被删」，而是「到期那一刻才知道」——链接失效时，
+印在物料上的那串地址已经作废，这时候能做的只剩道歉和重印。所以这一版把
+到期从「一个会自己发生的日期」变成「一件需要人处理的事」：
+
+- **提前量在界面上**：列表可按 7 天内 / 30 天内 / 已过期筛，三天内到期的行挂一枚 `N 天后到期`；
+  概览「本期要点」把 7 天内到期的条数并进待处理项；`highurl expiring` 在终端里给同一份名单。
+- **续期只动一个字段**：`setLinkExpire` 只写 `expire_at` / `status` / `status_before_expire`。
+  走通用 `update` 意味着把 url、title、tags、group 一起重新提交一遍，只要前端拿的是
+  十秒前读出来的快照，就有覆盖别人改动的机会。批量续期 500 条时，这个概率不为零。
+- **基准是「现在」而不是「原有效期」**：一批链里可能有的已经过期三天、有的还有二十天，
+  在 `expire_at` 上做加法在它们身上是完全不同的结果。原有效期还在未来的，从原有效期接着延
+  （提前续期不该缩短期限）；已经过期的，从现在起算。
+- **状态要还原，不能一律打开**：v10 加了 `status_before_expire`。自动停用的链续期后恢复成
+  过期前的状态；本来就手动停用的保持停用。不记这一笔，续期只能一律改回 `active`——
+  那等于替管理员把他自己关掉的链接又打开了。
+- **「已过期」看 `expire_at`，不看 `status`**：关掉回收策略的站里，过期链接的状态还停在
+  `active`，列表显示「生效中」、点进去却是 410。现在列表筛选与跳转用同一个口径。
+
 ## 分组与回收站
 
 **分组**是一层软归类：`links.group_id` 指向 `groups.id`，查询时用相关子查询取名字（`SELECT name FROM groups WHERE groups.id = links.group_id`），点一次链接列表只多一次极快的索引查找，不值得为此写 JOIN。
@@ -344,6 +364,10 @@ GROUP BY l.group_id, s.dow, s.hour
 浏览器一旦缓存了旧的 `app.css`，页面结构是对的、只是文字看不见——
 这种缺陷最容易被当成「设计就这样」漏过去。
 
+带 `v` 的请求回 `immutable`（一年），不带 `v` 的回落到 5 分钟：地址里既然有版本号，
+内容就是不可变的，可以放心长缓存。这一版之前统一只给 5 分钟，代价是升级后的头五分钟里
+浏览器还在用旧 JS 对着新接口跑——改了半天的新行为，刷新看不见。
+
 ## 短链名片页 `/<code>+`
 
 - 用 `+` 而不是 `/p/<code>` 或 `/preview?code=`：短码允许 1–64 位 `[A-Za-z0-9_-]`，任何英文路径段都可能正好是别人的短码，而 `+` 不在字符集里，永远不会撞。
@@ -375,7 +399,8 @@ groups(id, name UNIQUE COLLATE NOCASE, color, note, created_at, updated_at)
 links(id, code UNIQUE, url, title, note, tags, status, password,
       clicks, created_at, updated_at, last_click_at, expire_at,
       group_id,      -- 软引用分组，删分组只置空，不删链
-      deleted_at)    -- 非空表示在回收站
+      deleted_at,    -- 非空表示在回收站
+      status_before_expire)  -- 过期被自动停用前的状态，续期时按它还原
 click_daily(code, day, clicks)        -- 每日点击
 click_refs(code, host, clicks)         -- 来源域名
 click_agents(code, platform, clicks)   -- 平台分布
@@ -465,6 +490,25 @@ GROUP BY dow, hour
 
 `store.hourMatrix()` 把行摊成 7×24 的扁平数组（缺的补 0）再交给前端，顺便算出峰值与合计，
 前端不用自己补零，也不用为了一个峰值把 168 个数再遍历一遍。
+
+### v10：续期要知道「过期前是什么状态」
+
+```sql
+ALTER TABLE links ADD COLUMN status_before_expire TEXT NOT NULL DEFAULT '';
+CREATE INDEX idx_links_expire ON links(expire_at);
+```
+
+两件事挤在一步迁移里，理由都是「续期得知道原样」：
+
+- **状态还原**：过期停用会把 `status` 改成 `disabled`，原值就没了。续期时无法区分
+  「本来就手动停用」和「过期被自动停用」，只能一律改回 `active`——等于替管理员
+  把他自己关掉的链接打开了。`status_before_expire` 存下原值，续期按它还原；
+  空串表示「不是被过期清扫停用的」，那就别动状态。
+- **到期索引**：`expiringLinks()` 与列表的 `expiring` 筛选都是
+  `expire_at BETWEEN now AND now+N`，没有索引就是每次全表扫。
+
+`status_before_expire` 只在 `sweepExpired()` 里写，续期时清空——
+一次性的事实，用完即弃，不需要额外的状态机。
 
 ### v9：建页曝光与举报
 

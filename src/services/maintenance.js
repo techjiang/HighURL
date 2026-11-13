@@ -62,8 +62,12 @@ export function startMaintenance(ctx) {
           store.purgeLinkData(row.code);
           removed += 1;
         } else {
-          const link = store.sql.getLinkById.get(row.id);
-          store.sql.updateLink.run(link.url, link.title, link.note, link.tags, 'disabled', link.expire_at, Date.now(), link.id);
+          // 停用前把原状态记下来：续期时才知道该恢复成启用还是保持停用。
+          // 不记这一笔，续期就只能一律改回 active——那等于替管理员
+          // 把他自己关掉的链接又打开了
+          store.db
+            .prepare("UPDATE links SET status = 'disabled', status_before_expire = ?, updated_at = ? WHERE id = ?")
+            .run('active', Date.now(), row.id);
           archived += 1;
         }
       }

@@ -4,7 +4,7 @@
 const state = {
   me: null,
   view: 'dashboard',
-  links: { page: 1, q: '', status: '', sort: 'created_desc', tag: '', group: '', health: '', heat: '' },
+  links: { page: 1, q: '', status: '', sort: 'created_desc', tag: '', group: '', health: '', heat: '', expiring: '' },
   audit: { page: 1, filter: '' },
   trash: { page: 1 },
 };
@@ -39,6 +39,7 @@ const ICONS = {
   trend: 'M4 17l5-6 3.5 3L20 6M20 6h-4.5M20 6v4.5',
   alert: 'M12 4l8 15H4zM12 10v4M12 16.5v.5',
   info: 'M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM12 11v5M12 8v.5',
+  clock: 'M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM12 8v4.3l2.8 1.7',
 };
 
 function ic(name, size = 15) {
@@ -116,6 +117,13 @@ function fmtBytes(n) {
 function fmtDate(ts) {
   if (!ts) return '—';
   return new Date(Number(ts)).toLocaleString('zh-CN', { hour12: false });
+}
+
+/** 到期时间：到分钟就够，秒数对「这条还能用多久」这个判断没有任何帮助 */
+function fmtExpire(ts) {
+  const d = new Date(Number(ts));
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 async function copy(text) {
@@ -572,12 +580,13 @@ async function viewDashboard(root) {
 
 /* ---------- 视图：短链列表 ---------- */
 async function viewLinks(root) {
-  const { page, q, status, sort, tag, group, health, heat } = state.links;
+  const { page, q, status, sort, tag, group, health, heat, expiring } = state.links;
   const params = new URLSearchParams({ page, q, status, sort, perPage: 20 });
   if (tag) params.set('tag', tag);
   if (group) params.set('group', group);
   if (health) params.set('health', health);
   if (heat) params.set('heat', heat);
+  if (expiring) params.set('expiring', expiring);
   const { result } = await api(`/admin/api/links?${params}`);
   state.links.page = result.page;
   // 页码越界（删完最后一页）时回退一页重来
@@ -624,6 +633,15 @@ async function viewLinks(root) {
       <button class="chip ${heat === 'warm' ? 'on' : ''}" data-heat="warm"><i class="dotcolor" style="background:var(--warn)"></i>有热度</button>
     </div>`;
 
+  // 到期：链接失效是「事后才知道」的典型，所以这一行要在链路上主动摆出来，
+  // 而不是等人自己想起来去翻有效期
+  const expiryChips = `<div class="tagbar"><span class="muted">到期</span>
+      <button class="chip ${expiring ? '' : 'on'}" data-expiring="">全部</button>
+      <button class="chip ${expiring === '7' ? 'on' : ''}" data-expiring="7">7 天内到期</button>
+      <button class="chip ${expiring === '30' ? 'on' : ''}" data-expiring="30">30 天内到期</button>
+      <button class="chip ${status === 'expired' ? 'on' : ''}" data-expired="1">已过期</button>
+    </div>`;
+
   const rows = result.items.length
     ? result.items
         .map(
@@ -654,6 +672,7 @@ async function viewLinks(root) {
           <button class="btn btn-ghost btn-sm btn-icon" data-act="stats" title="统计" aria-label="统计">${ic('chart')}</button>
           <button class="btn btn-ghost btn-sm btn-icon" data-act="qr" title="二维码" aria-label="二维码">${ic('qr')}</button>
           <button class="btn btn-ghost btn-sm btn-icon" data-act="history" title="变更历史" aria-label="变更历史">${ic('history')}</button>
+          <button class="btn btn-ghost btn-sm btn-icon" data-act="renew" title="续期" aria-label="续期">${ic('clock')}</button>
           <button class="btn btn-ghost btn-sm btn-icon" data-act="edit" title="编辑" aria-label="编辑">${ic('edit')}</button>
           <button class="btn btn-ghost btn-sm btn-icon" data-act="del" title="删除" aria-label="删除">${ic('trash')}</button>
         </div>
@@ -707,6 +726,7 @@ async function viewLinks(root) {
   ${tagChips}
   ${healthChips}
   ${heatChips}
+  ${expiryChips}
   <div id="batchbar"></div>
   <div class="card">
     <div class="table-wrap">
@@ -739,6 +759,7 @@ async function viewLinks(root) {
       <button class="btn btn-ghost btn-sm" data-batch="sheet">${ic('sheet')} 拼版打印</button>
       <button class="btn btn-ghost btn-sm" data-batch="group">${ic('folder')} 改分组</button>
       <button class="btn btn-ghost btn-sm" data-batch="tags">改标签</button>
+      <button class="btn btn-ghost btn-sm" data-batch="renew">${ic('clock')} 续期</button>
       <button class="btn btn-ghost btn-sm" data-batch="enable">启用</button>
       <button class="btn btn-ghost btn-sm" data-batch="disable">停用</button>
       <button class="btn btn-danger btn-sm" data-batch="delete">移入回收站</button>
@@ -767,6 +788,10 @@ async function viewLinks(root) {
         }
         if (action === 'tags') {
           showBatchTags();
+          return;
+        }
+        if (action === 'renew') {
+          showBatchRenew();
           return;
         }
         if (action === 'delete') {
@@ -827,6 +852,69 @@ async function viewLinks(root) {
     });
   };
 
+  /**
+   * 批量续期：往后推 N 天 / 指定日期 / 永久。
+   *
+   * 只让选「从现在起多久」，不让填「在原来的基础上加多久」——
+   * 一批里有的链已经过期三天、有的还有二十天，同一种加法在它们身上
+   * 是完全不同的结果，界面上说不清，事后也查不明白。
+   */
+  const showBatchRenew = () => {
+    const today = new Date();
+    const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    modal({
+      title: `续期（${selected.size} 条）`,
+      bodyHtml: `<div class="field"><label>怎么续</label>
+          <select id="br-mode">
+            <option value="days">从现在起再加一段时间</option>
+            <option value="until">统一改到一个日期</option>
+            <option value="forever">设为永久有效</option>
+          </select></div>
+        <div class="field"><label>时长</label>
+          <select id="br-days">
+            <option value="7">7 天</option>
+            <option value="30" selected>30 天</option>
+            <option value="90">90 天</option>
+            <option value="180">180 天</option>
+            <option value="365">1 年</option>
+          </select></div>
+        <div class="field"><label>到期日</label>
+          <input type="date" id="br-until" value="${iso(new Date(today.getTime() + 30 * 86400000))}">
+          <p class="hint">选中的短链到期后会立刻失效；这里只改有效期，目标地址、标题、标签都不动。
+            若其中有的链原本是过期后被自动停用的，续期会自动恢复成启用。</p></div>`,
+      confirmText: '续期',
+      onConfirm: async (mask) => {
+        const mode = $('#br-mode', mask).value;
+        const body = { action: 'renew', codes: [...selected] };
+        if (mode === 'days') body.days = Number($('#br-days', mask).value);
+        else if (mode === 'until') body.expireAt = $('#br-until', mask).value;
+        else body.expireAt = null;
+        const { result: r } = await api('/admin/api/links/batch', { method: 'POST', body });
+        toast(
+          `已为 ${r.affected} 条续期${r.forever ? '（永久有效）' : r.days ? `（+${r.days} 天）` : ''}${r.missing.length ? `，${r.missing.length} 条不存在` : ''}`,
+          'ok',
+        );
+        selected.clear();
+        render();
+      },
+    });
+    // 三块控件互斥着显示：摆在一起会让人以为「时长」和「到期日」要一起填
+    const sync = () => {
+      const mask = $('.modal-mask:last-of-type');
+      if (!mask) return;
+      const mode = $('#br-mode', mask)?.value;
+      const days = $('#br-days', mask)?.closest('.field');
+      const until = $('#br-until', mask)?.closest('.field');
+      if (days) days.style.display = mode === 'days' ? '' : 'none';
+      if (until) until.style.display = mode === 'until' ? '' : 'none';
+    };
+    requestAnimationFrame(() => {
+      const mask = $('.modal-mask:last-of-type');
+      $('#br-mode', mask)?.addEventListener('change', sync);
+      sync();
+    });
+  };
+
   const runBatch = async (action) => {
     try {
       const { result: r } = await api('/admin/api/links/batch', {
@@ -866,6 +954,25 @@ async function viewLinks(root) {
   $$('[data-heat]', root).forEach((chip) =>
     chip.addEventListener('click', () => {
       state.links.heat = chip.dataset.heat;
+      state.links.page = 1;
+      render();
+    }),
+  );
+
+  $$('[data-expiring]', root).forEach((chip) =>
+    chip.addEventListener('click', () => {
+      state.links.expiring = chip.dataset.expiring;
+      // 「即将到期」与「已过期」互斥：一个是还没坏，一个是已经坏了
+      if (chip.dataset.expiring) state.links.status = '';
+      state.links.page = 1;
+      render();
+    }),
+  );
+
+  $$('[data-expired]', root).forEach((chip) =>
+    chip.addEventListener('click', () => {
+      state.links.status = 'expired';
+      state.links.expiring = '';
       state.links.page = 1;
       render();
     }),
@@ -994,6 +1101,7 @@ async function viewLinks(root) {
     $('[data-act="stats"]', tr)?.addEventListener('click', () => showStats(link));
     $('[data-act="qr"]', tr)?.addEventListener('click', () => showQr(link));
     $('[data-act="history"]', tr)?.addEventListener('click', () => showHistory(link));
+    $('[data-act="renew"]', tr)?.addEventListener('click', () => showRenew(link));
     $('[data-act="edit"]', tr)?.addEventListener('click', () => showEdit(link));
     $('[data-act="del"]', tr)?.addEventListener('click', () =>
       confirmDialog('移入回收站', `确定把 /${code} 移入回收站吗？短码会继续占位，之后可以在回收站恢复。`, async () => {
@@ -1556,8 +1664,15 @@ function healthBadge(l) {
 }
 
 function statusBadge(l) {
+  const now = Date.now();
+  if (l.expireAt && l.expireAt < now) return '<span class="tag tag-warn">已过期</span>';
   if (l.status === 'disabled') return '<span class="tag tag-err">已停用</span>';
-  if (l.expireAt && l.expireAt < Date.now()) return '<span class="tag tag-warn">已过期</span>';
+  // 到期是个渐变的过程，不是某天突然发生的事。三天内到期的给一枚提醒，
+  // 免得到时候又变成「怎么突然打不开了」
+  if (l.expireAt && l.expireAt - now < 3 * 86400000) {
+    const days = Math.max(1, Math.ceil((l.expireAt - now) / 86400000));
+    return `<span class="tag tag-ok">生效中</span><span class="tag tag-warn" title="${esc(new Date(l.expireAt).toLocaleString())}">${days} 天后到期</span>`;
+  }
   return '<span class="tag tag-ok">生效中</span>';
 }
 
@@ -1892,6 +2007,44 @@ function targetHitRows(targets) {
     .join('');
 }
 
+/**
+ * 单条续期。默认值取「原来的期限长度」——运营者把一条 30 天的链续上，
+ * 想要的通常是再来 30 天，而不是随手点一个默认的 7 天。
+ */
+function showRenew(link) {
+  const now = Date.now();
+  const originalSpan = link.expireAt && link.createdAt ? Math.max(1, Math.round((link.expireAt - link.createdAt) / 86400000)) : 30;
+  const presets = [...new Set([7, 30, 90, 180, 365, originalSpan])].sort((a, b) => a - b);
+  const left = link.expireAt ? link.expireAt - now : null;
+  const stateText = left === null
+    ? '这条短链目前永久有效'
+    : left < 0
+      ? `已经过期 ${Math.abs(Math.round(left / 86400000))} 天`
+      : `还有 ${Math.max(1, Math.round(left / 86400000))} 天到期`;
+  modal({
+    title: `/${link.code} 续期`,
+    bodyHtml: `<div class="field"><label>当前状态</label><p class="hint">${esc(stateText)}${link.expireAt ? `（${fmtExpire(link.expireAt)}）` : ''}</p></div>
+      <div class="field"><label>续到</label>
+        <select id="rn-days">
+          ${presets.map((d) => `<option value="${d}" ${d === 30 ? 'selected' : ''}>从现在起 +${d} 天${d === originalSpan ? '（按原期限）' : ''}</option>`).join('')}
+          <option value="forever">永久有效</option>
+        </select>
+        <p class="hint">从现在起算，不是在原有效期上叠加——一批同类链接的期限长度仍然一致。
+          ${link.status === 'disabled' ? '这条现在是停用状态，续期不会自动打开它。' : ''}</p></div>`,
+    confirmText: '续期',
+    onConfirm: async (mask) => {
+      const v = $('#rn-days', mask).value;
+      // 天数在提交时才算成具体时刻：弹窗开着不动一会儿，算出来的到期时间不该缩水
+      const { result: r } = await api(`/admin/api/links/${encodeURIComponent(link.code)}/renew`, {
+        method: 'POST',
+        body: v === 'forever' ? { expireAt: null } : { expireAt: Date.now() + Number(v) * 86400000 },
+      });
+      toast(`/${link.code} 已续到 ${r.expireAt ? fmtExpire(r.expireAt) : '永久'}`, 'ok');
+      render();
+    },
+  });
+}
+
 async function showStats(link) {
   const { result } = await api(`/admin/api/links/${encodeURIComponent(link.code)}/stats`);
   const max = Math.max(1, ...result.daily.map((d) => d.clicks));
@@ -1923,8 +2076,37 @@ async function showStats(link) {
     </div>
     ${result.countries?.length ? `<div style="margin-top:16px"><label>访客地区</label>${list(result.countries.map((c) => ({ ...c, country: countryName(c.country) })), 'country')}</div>` : ''}
     <div style="margin-top:16px"><label>访问时段</label>${hourHeat(result.hours, { compact: true })}</div>
-    ${result.targets?.length ? `<div style="margin-top:16px"><label>分流目标命中</label>${targetHitRows(result.targets)}</div>` : ''}`,
+    ${result.targets?.length ? `<div style="margin-top:16px"><label>分流目标命中</label>${targetHitRows(result.targets)}</div>` : ''}
+    ${expiryLine(result)}`,
   });
+  $('#stats-renew')?.addEventListener('click', () => {
+    document.querySelector('.modal-mask:last-of-type')?.remove();
+    showRenew(result);
+  });
+}
+
+/**
+ * 统计弹窗里的有效期一行。
+ *
+ * 放在这里是因为「这条还能用多久」本来就和「这条被点了多少次」是同一个问题：
+ * 数据好看、但明晚就到期，是两件必须一起看的事。快到期的直接给续期按钮，
+ * 别让人再去列表里翻那一行。
+ */
+function expiryLine(link) {
+  const now = Date.now();
+  if (!link.expireAt) {
+    return `<div class="row" style="margin-top:16px;gap:10px;align-items:center"><span class="tag tag-ok">永久有效</span><span class="muted">这条短链不会自己失效</span></div>`;
+  }
+  const left = link.expireAt - now;
+  const days = Math.ceil(Math.abs(left) / 86400000);
+  const text = left < 0 ? `已过期 ${days} 天` : days <= 1 ? '今天到期' : `还有 ${days} 天到期`;
+  const cls = left < 0 ? 'tag-err' : days <= 3 ? 'tag-warn' : '';
+  return `<div class="row" style="margin-top:16px;gap:10px;align-items:center">
+      <span class="tag ${cls}">${text}</span>
+      <span class="muted">${esc(fmtExpire(link.expireAt))}</span>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost btn-sm" id="stats-renew">${ic('clock')} 续期</button>
+    </div>`;
 }
 
 /* ---------- 访问时段热力图 ---------- */
@@ -2616,6 +2798,8 @@ const ACTION_LABEL = {
   'link.qr_export': '二维码 ZIP',
   'link.batch_group': '批量改分组',
   'link.batch_tags': '批量改标签',
+  'link.renew': '续期',
+  'link.batch_renew': '批量续期',
   'stats.collect_orphans': '清理孤儿统计',
   'link.qr_sheet': '拼版打印',
   'link.expire_sweep': '过期回收',
@@ -3326,11 +3510,24 @@ async function render() {
       state.links.q = q;
       jumped = true;
     }
+    // 「即将到期」也是从日报点进来的入口，落到同一套筛选上
+    const expiring = params.get('expiring');
+    if (expiring !== null) {
+      state.links.expiring = expiring;
+      state.links.status = '';
+      jumped = true;
+    }
+    const statusParam = params.get('status');
+    if (statusParam !== null) {
+      state.links.status = statusParam;
+      if (statusParam === 'expired') state.links.expiring = '';
+      jumped = true;
+    }
     if (jumped) state.links.page = 1;
   }
   state.view = view;
   // 记住这一屏是从地址栏参数跳进来的：用户之后再改筛选，就不能被参数里那套覆盖回去
-  if (view === 'links' && (params.get('sort') || params.get('health') || params.get('q') !== null)) {
+  if (view === 'links' && (params.get('sort') || params.get('health') || params.get('q') !== null || params.get('expiring') || params.get('status'))) {
     state.linksFromHash = true;
   }
   $$('.navlink').forEach((a) => a.classList.toggle('active', a.dataset.nav === view));

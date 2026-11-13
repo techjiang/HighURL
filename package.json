@@ -1,6 +1,6 @@
 {
   "name": "highurl",
-  "version": "1.15.0",
+  "version": "1.16.0",
   "description": "HighURL - 高性能、零依赖、开箱即用的自托管短链接系统",
   "type": "module",
   "engines": {

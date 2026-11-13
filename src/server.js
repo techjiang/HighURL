@@ -155,7 +155,14 @@ export async function createServer(options = {}) {
     try {
       // 1) 静态资源
       if (pathname.startsWith('/static/') || pathname.startsWith('/img/')) {
-        const served = statics.serve(req, res, pathname.replace(/^\/(static|img)\//, (m) => (m === '/img/' ? '/img/' : '/static/')));
+        // 页面引用这些资源时都带 `?v=<版本号>`，版本一变 URL 就变，
+        // 所以可以放心地让浏览器长期缓存。以前这里只给 5 分钟，
+        // 结果升级后用户拿着旧 admin.js 对着新接口跑，改了半天的行为看不见——
+        // 而真正需要「立刻生效」的场景，恰好是升级之后的那一次刷新
+        const fingerprinted = new URL(req.url, 'http://x').searchParams.has('v');
+        const served = statics.serve(req, res, pathname.replace(/^\/(static|img)\//, (m) => (m === '/img/' ? '/img/' : '/static/')), {
+          immutable: fingerprinted,
+        });
         if (served) return;
         throw new HttpError(404, '资源不存在', 'static_not_found');
       }

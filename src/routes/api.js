@@ -95,6 +95,23 @@ export function registerApiRoutes(router, ctx) {
     sendJson(res, 200, { ok: true, result: serialize(ctx, req, link) });
   });
 
+  /**
+   * 续期。单独一个动词而不是 PATCH {expireAt}：PATCH 是全字段更新，
+   * 只想延长期限的调用方得先把整条记录读出来再写回去，中途别人改的字段就被覆盖了。
+   * 这里只动有效期与状态。
+   */
+  router.post('/api/v1/links/:code/renew', async (req, res, params) => {
+    const actor = requireApi(req, 'write');
+    checkOrigin(req, settings.get('baseUrl'));
+    const row = store.findLinkByCode(params.code);
+    if (!row) throw new HttpError(404, '短链不存在', 'link_not_found');
+    const body = await parseJsonBody(req, ctx.config.maxBodyBytes);
+    const input = body.days ? { expireAt: Date.now() + Number(body.days) * 86400000 } : body;
+    const link = links.renew(row.id, input, { actor: `${actor.kind}:${actor.name}` });
+    cache.invalidate(link.code);
+    sendJson(res, 200, { ok: true, result: serialize(ctx, req, link) });
+  });
+
   router.delete('/api/v1/links/:code', async (req, res, params) => {
     const actor = requireApi(req, 'write');
     checkOrigin(req, settings.get('baseUrl'));
@@ -179,6 +196,10 @@ export function statsFor(store, row, days = 30) {
     code: row.code,
     clicks: row.clicks,
     lastClickAt: row.last_click_at,
+    // 统计页要顺带回答「这条还能用多久」：数据好看但明晚就到期，
+    // 是两件必须一起看的事，不该逼人再回列表里翻那一行
+    expireAt: row.expire_at,
+    status: row.status,
     daily: series,
     hours: store.hourMatrix(store.sql.linkSlots.all(row.code)),
     referrers: store.sql.linkRefs.all(row.code, 10),

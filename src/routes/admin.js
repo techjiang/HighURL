@@ -181,6 +181,38 @@ export function registerAdminRoutes(router, ctx) {
     }),
   );
 
+  /**
+   * 即将到期的一批。返回剩余毫秒而不是格式化好的文案：
+   * 「还有 2 天」这种话要按用户时区和当前时间算，服务端算好再传过去，
+   * 页面开着一小时后还在说同样的话。
+   */
+  router.get('/admin/api/expiring', (req, res) =>
+    api(req, res, (me, req) => {
+      const q = new URL(req.url, 'http://x').searchParams;
+      const days = Number(q.get('days')) || 7;
+      const out = store.expiringLinks({ days, limit: Math.min(200, Number(q.get('limit')) || 50) });
+      return {
+        result: {
+          days: out.days,
+          until: out.until,
+          rows: out.rows.map((row) => ({ ...serialize(ctx, req, row), leftMs: row.expire_at - Date.now() })),
+        },
+      };
+    }),
+  );
+
+  /** 单条续期：只动 expire_at 与状态，不碰别的字段 */
+  router.post('/admin/api/links/:code/renew', (req, res, params) =>
+    api(req, res, async (me, req) => {
+      const row = store.findLinkByCode(params.code);
+      if (!row) throw new HttpError(404, '短链不存在', 'link_not_found');
+      const body = await parseJsonBody(req, ctx.config.maxBodyBytes);
+      const link = links.renew(row.id, body, { actor: me.username });
+      cache.invalidate(link.code);
+      return { result: serialize(ctx, req, link) };
+    }),
+  );
+
   router.get('/admin/api/links', (req, res) =>
     api(req, res, (me, req) => {
       const q = new URL(req.url, 'http://x').searchParams;
@@ -195,6 +227,7 @@ export function registerAdminRoutes(router, ctx) {
         heat: q.get('heat') || '',
         sort: q.get('sort') || 'created_desc',
         sinceDay: dateKey(new Date(Date.now() - 86400000)),
+        expiring: q.get('expiring') || '',
         page,
         perPage,
       });
@@ -228,13 +261,21 @@ export function registerAdminRoutes(router, ctx) {
     api(req, res, async (me, req) => {
       const body = await parseJsonBody(req, ctx.config.maxBodyBytes);
       const action = String(body.action || '');
-      const ACTIONS = ['enable', 'disable', 'delete', 'restore', 'purge', 'group', 'tags'];
+      const ACTIONS = ['enable', 'disable', 'delete', 'restore', 'purge', 'group', 'tags', 'renew'];
       if (!ACTIONS.includes(action)) {
         throw new HttpError(400, `action 只能是 ${ACTIONS.join(' / ')}`, 'bad_action');
       }
       const codes = Array.isArray(body.codes) ? body.codes.map((c) => String(c)) : [];
       if (!codes.length) throw new HttpError(400, '请先选择短链', 'empty_selection');
       if (codes.length > 500) throw new HttpError(400, '单次最多操作 500 条', 'too_many');
+
+      // 续期走单独的 service：它要算基准时间、要按「过期前状态」决定恢复成什么，
+      // 塞进下面那个逐条 switch 里只会变成第二个实现
+      if (action === 'renew') {
+        const result = links.renewMany(codes, body, { actor: me.username });
+        cache.invalidate();
+        return { result };
+      }
 
       // 批量改分组的入参先算好：group 为 null/'' 表示「移出分组」
       const targetGroup = action === 'group' ? links.groupIdOf(links.pickGroupInput(body)) : undefined;

@@ -70,6 +70,11 @@ export function buildDigest(store, { now = Date.now(), hours = 24 } = {}) {
   const dead = scalar("SELECT COUNT(*) AS n FROM links WHERE deleted_at IS NULL AND health_status = 'dead'");
   const openReports = store.sql.countOpenReports.get().n;
   const trashed = store.sql.countDeleted.get().n;
+  // 即将到期：默认提前 7 天叫人。过期以后才发现是最糟的时序——
+  // 印在物料上的那串地址已经作废了，这时候能做的只剩道歉和重印
+  const expiringTotal = store.db
+    .prepare('SELECT COUNT(*) AS n FROM links WHERE deleted_at IS NULL AND expire_at IS NOT NULL AND expire_at >= ? AND expire_at <= ?')
+    .get(now, now + 7 * 86400000).n;
 
   const items = [];
   const push = (kind, text, link = '', value = null) => items.push({ kind, text, link, value });
@@ -114,7 +119,8 @@ export function buildDigest(store, { now = Date.now(), hours = 24 } = {}) {
   // 4. 需要人动手的三类
   if (openReports > 0) push('warn', `有 ${openReports} 条举报还没处理`, '#/reports', String(openReports));
   if (dead > 0) push('warn', `${dead} 条短链的目标地址已确认打不开`, '#/links?health=dead', String(dead));
-  if (expired > 0) push('warn', `${expired} 条短链已过有效期`, '#/links', String(expired));
+  if (expired > 0) push('warn', `${expired} 条短链已过有效期`, '#/links?status=expired', String(expired));
+  if (expiringTotal > 0) push('warn', `${expiringTotal} 条短链将在 7 天内过期`, '#/links?expiring=7', String(expiringTotal));
   if (trashed > 0) push('muted', `回收站里有 ${trashed} 条，到期会自动清理`, '#/trash', String(trashed));
 
   const hot = store.hotLinks({ hours: span, limit: 5, now });
@@ -126,7 +132,7 @@ export function buildDigest(store, { now = Date.now(), hours = 24 } = {}) {
     from: now - span * 3600000,
     fromDay: fromKey,
     level,
-    counts: { clicks: clicksNow, clicksPrev, views: viewsNow, viewsPrev, created: createdNow },
+    counts: { clicks: clicksNow, clicksPrev, views: viewsNow, viewsPrev, created: createdNow, expiring: expiringTotal },
     items,
     hot: hot.rows.map((r) => ({
       code: r.code,

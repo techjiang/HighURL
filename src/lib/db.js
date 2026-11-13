@@ -330,6 +330,28 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_reports_code ON reports(code);
     `);
   },
+
+  /**
+   * v10：记住「过期前本来是什么状态」。
+   *
+   * 过期回收把链接置成 disabled 之后，信息就丢了：这条是本来就停用的，
+   * 还是过期被自动停用的？续期时该恢复成 active 还是保持停用？
+   * 没有这个字段，续期只能一律改回 active——那就等于替管理员把一个
+   * 他自己关掉的链接又打开了。
+   *
+   * 另一个用途是「这条其实已经过期，只是状态还没被清扫」的判定：
+   * 过期判断原本只看 expire_at，于是关掉策略的站里，过期链接在列表上
+   * 依然显示「启用」，点进去 410，两边说法不一致。
+   */
+  function v10(db) {
+    const existing = new Set(db.prepare('PRAGMA table_info(links)').all().map((c) => c.name));
+    if (!existing.has('status_before_expire')) {
+      db.exec("ALTER TABLE links ADD COLUMN status_before_expire TEXT NOT NULL DEFAULT ''");
+    }
+    // 续期要找「快到期的」：没有索引时每次筛选都是全表扫，
+    // 而短链表本来就不大，一条索引足够
+    db.exec('CREATE INDEX IF NOT EXISTS idx_links_expire ON links(expire_at)');
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -386,7 +408,7 @@ export const HEAT_BANDS = { hot: 0.6, warm: 0.2 };
 const LINK_COLUMNS = `id, code, url, title, note, tags, status, group_id,
   (SELECT name FROM groups WHERE groups.id = links.group_id) AS group_name,
   password IS NOT NULL AS protected,
-  clicks, created_at, updated_at, last_click_at, expire_at, deleted_at,
+  clicks, created_at, updated_at, last_click_at, expire_at, deleted_at, status_before_expire,
   health_status, health_code, health_at, health_ms, health_error, health_miss,
   interstitial, landing_theme, interstitial_note, qr_style,
   (SELECT COUNT(*) FROM link_targets WHERE link_targets.link_id = links.id AND link_targets.enabled = 1) AS target_count`;
@@ -416,6 +438,10 @@ export class Store {
       purgeLinkRefs: prepare('DELETE FROM click_refs WHERE code = ?'),
       purgeLinkAgents: prepare('DELETE FROM click_agents WHERE code = ?'),
       updateLink: prepare(`UPDATE links SET url = ?, title = ?, note = ?, tags = ?, status = ?, expire_at = ?, updated_at = ? WHERE id = ?`),
+      // 续期单独一条：批量续期不该顺手把 url / title / tags 又写一遍，
+      // 那些字段这次根本没被碰过，重写一次就多一次覆盖别人改动的机会。
+      // 同时清掉「过期前状态」，改完有效期这条已经不是「过期后被停用」的状态了
+      setLinkExpire: prepare("UPDATE links SET expire_at = ?, status = ?, status_before_expire = '', updated_at = ? WHERE id = ?"),
       updateLinkPassword: prepare('UPDATE links SET password = ?, updated_at = ? WHERE id = ?'),
       updateLinkLanding: prepare('UPDATE links SET interstitial = ?, landing_theme = ?, interstitial_note = ?, updated_at = ? WHERE id = ?'),
       updateLinkQrStyle: prepare('UPDATE links SET qr_style = ?, updated_at = ? WHERE id = ?'),
@@ -648,9 +674,17 @@ export class Store {
    * 查询本身仍然只扫一遍 links 表（一条聚合 + 一条分页），
    * 比把排序交给索引但算不出相对热度要实在。
    */
-  listLinks({ q = '', status = '', tag = '', group = '', health = '', heat = '', sort = 'created_desc', sinceDay = '', page = 1, perPage = 20 } = {}) {
+  listLinks({ q = '', status = '', tag = '', group = '', health = '', heat = '', sort = 'created_desc', sinceDay = '', expiring = '', page = 1, perPage = 20 } = {}) {
     const where = ['deleted_at IS NULL'];
     const params = [];
+    // 「即将到期」按天算，不按时分：有效期本来就是粗粒度的东西，
+    // 精确到分钟只会让同一批链接在界面上前后脚地消失
+    const windowDays = Number(expiring) || 0;
+    if (windowDays > 0) {
+      const now = Date.now();
+      where.push('expire_at IS NOT NULL AND expire_at >= ? AND expire_at <= ?');
+      params.push(now, now + windowDays * 86400000);
+    }
     if (q) {
       where.push("(code LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' OR note LIKE ? ESCAPE '\\')");
       const like = `%${String(q).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
@@ -661,6 +695,9 @@ export class Store {
       params.push(status);
     }
     if (status === 'expired') {
+      // 「过期」是 expire_at 说了算，不是 status 说了算。
+      // 关掉过期策略的站里，过期链接的状态还停在 active，
+      // 之前这里只看 expire_at，列表给的是「启用」，点进去却是 410。
       where.push('expire_at IS NOT NULL AND expire_at < ?');
       params.push(Date.now());
     }
@@ -721,6 +758,23 @@ export class Store {
   /** 全库最高点击数，热度分档的基准 */
   maxClicks() {
     return this.db.prepare('SELECT COALESCE(MAX(clicks), 0) AS n FROM links WHERE deleted_at IS NULL').get().n || 0;
+  }
+
+  /**
+   * 即将到期的短链，按剩余时间升序。
+   *
+   * 过期是最典型的「事后才知道」：链接一失效，印在物料上的那串地址就作废，
+   * 而人往往要等到有人反馈才发现。这里提前 N 天把人叫过来处理。
+   * 已经过期的排除掉——那是另一件事（要不要恢复），不该和「还有 2 天」混在一张榜上。
+   */
+  expiringLinks({ days = 7, limit = 50, now = Date.now() } = {}) {
+    const windowDays = Math.max(1, Math.min(365, Number(days) || 7));
+    const rows = this.db
+      .prepare(`SELECT ${LINK_COLUMNS} FROM links
+        WHERE deleted_at IS NULL AND expire_at IS NOT NULL AND expire_at >= ? AND expire_at <= ?
+        ORDER BY expire_at ASC, id ASC LIMIT ?`)
+      .all(now, now + windowDays * 86400000, Math.max(1, limit));
+    return { days: windowDays, until: now + windowDays * 86400000, rows };
   }
 
   /**

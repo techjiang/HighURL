@@ -22,6 +22,7 @@ const HELP = `HighURL ${pkg.version} · 高性能自托管短链接系统
   highurl restore <文件>     从 JSON 备份恢复 [--replace --yes] [--dry-run] [--force]
   highurl migrate <文件>     导入 YOURLS dump / HighURL 备份 / CSV
   highurl stats              查看统计
+  highurl expiring [--days 7] 列出即将到期的短链
   highurl doctor             自检运行环境
 
 通用选项:
@@ -291,6 +292,33 @@ async function cmdStats(args) {
   ctx.store.close();
 }
 
+/**
+ * 列出即将到期的短链。
+ *
+ * 命令行版本存在的理由很实际：真正需要提前处理的场景是「一批物料还没发出去，
+ * 先确认里面没有明天就失效的链」，那时候人在 CI 或终端里，不在管理台。
+ * 输出用制表符分隔，脚本直接可切；带 --code-only 就只吐短码，方便接批量续期。
+ */
+async function cmdExpiring(args) {
+  const ctx = openContext(args);
+  const days = Math.max(1, Math.min(365, Number(args.days) || 7));
+  const { rows } = ctx.store.expiringLinks({ days, limit: Math.max(1, Number(args.limit) || 200) });
+  const now = Date.now();
+  if (args['code-only']) {
+    for (const row of rows) console.log(row.code);
+  } else if (!rows.length) {
+    console.log(`未来 ${days} 天没有到期的短链`);
+  } else {
+    console.log(`未来 ${days} 天有 ${rows.length} 条短链到期：`);
+    for (const row of rows) {
+      const left = Math.max(0, Math.ceil((row.expire_at - now) / 86400000));
+      console.log(`  /${row.code}\t${left} 天后\t${new Date(row.expire_at).toISOString().slice(0, 10)}\t${row.title || row.url}`);
+    }
+    console.log('\n续期：highurl expiring --code-only | xargs …（或在管理台短链页批量续期）');
+  }
+  ctx.store.close();
+}
+
 async function cmdDoctor(args) {
   const checks = [];
   const add = (ok, label, detail = '') => checks.push({ ok, label, detail });
@@ -345,6 +373,7 @@ const commands = {
   restore: cmdRestore,
   migrate: cmdMigrate,
   stats: cmdStats,
+  expiring: cmdExpiring,
   doctor: cmdDoctor,
 };
 
