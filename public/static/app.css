@@ -1266,6 +1266,9 @@ tbody tr.picked { background: rgba(139, 92, 246, .1); }
 /* .split 默认两栏等宽；渠道表宽五列、投递表宽七列，各占一半都会挤，
    这里让渠道表占得多一点 */
 .tbl-notify td { vertical-align: middle; }
+/* 渠道状态列会同时挂「启用」和「静默时段」两个标签，用 flex 让它们间距一致，
+   而不是靠空格挤在一行、宽度不够时又各自换行 */
+.tbl-notify .tag-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .tbl-notify .mono { max-width: 320px; }
 .del-row.st-failed td { background: rgba(248, 113, 113, .06); }
 .del-row.st-retry td { background: rgba(251, 191, 36, .05); }

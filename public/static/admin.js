@@ -3541,8 +3541,27 @@ const EVENT_LABEL = {
   'link.expiring': '短链即将到期',
   'report.new': '收到新的举报',
   'backup.failed': '自动备份失败',
+  // 静默结束时合并出来的摘要，不是可以订阅的事件，但投递记录里会出现
+  digest: '静默汇总',
 };
-const DELIVERY_LABEL = { success: '已送达', failed: '失败', retry: '重试中', pending: '排队中' };
+const DELIVERY_LABEL = { success: '已送达', failed: '失败', retry: '重试中', pending: '排队中', held: '静默待发', dropped: '静默未发' };
+const QUIET_POLICY_LABEL = { digest: '攒着，结束后合并补发', drop: '静默期内不发' };
+
+/**
+ * 投递记录的「状态码 × 次数」那一列。
+ *
+ * 挂起和丢弃的记录没有状态码，显示成「— × 0」等于告诉人「发了一次都没成」，
+ * 而事实是它压根还没发。这两种直接把原因写出来：一个说什么时候会发，一个说被吞了。
+ */
+function deliveryDetail(d) {
+  if (d.status === 'held') return `<span class="nowrap">静默中 · 结束后补发</span>`;
+  if (d.status === 'dropped') return `<span class="nowrap">按策略未发送</span>`;
+  const code = d.code ? esc(String(d.code)) : '—';
+  // 只有失败 / 重试中的记录才值得在状态码后面挂个警告号。
+  // 成功记录也可能带一句备注（比如「已并入静默摘要」），那不是问题
+  const warn = (d.status === 'failed' || d.status === 'retry') && d.note ? ' ⚠' : '';
+  return `<span class="mono nowrap">${code} × ${num(d.attempts)}${warn}</span>`;
+}
 
 async function viewNotify(root) {
   const { result } = await api('/admin/api/notify/channels');
@@ -3563,7 +3582,8 @@ async function viewNotify(root) {
       </td>
       <td><span class="tag">${esc(result.kinds.find((k) => k.key === c.kind)?.label || c.kind)}</span></td>
       <td>${eventChips(c)}</td>
-      <td>${c.enabled ? '<span class="tag tag-ok">启用</span>' : '<span class="tag">停用</span>'}</td>
+      <td><div class="tag-row">${c.enabled ? '<span class="tag tag-ok">启用</span>' : '<span class="tag">停用</span>'}
+        ${c.quiet?.from && c.quiet?.to ? `<span class="tag ${c.quietActive ? 'tag-warn' : ''}" title="${esc(QUIET_POLICY_LABEL[c.quiet.policy] || '')}">${c.quietActive ? '静默中' : '静默'} ${esc(c.quiet.from)}–${esc(c.quiet.to)}</span>` : ''}</div></td>
       <td style="white-space:nowrap">
         <button class="btn btn-ghost btn-sm" data-test>测试</button>
         <button class="btn btn-ghost btn-sm" data-toggle data-writes>${c.enabled ? '停用' : '启用'}</button>
@@ -3579,11 +3599,11 @@ async function viewNotify(root) {
     ? del.result.items
         .map(
           (d) => `<tr class="del-row st-${esc(d.status)}" data-did="${d.id}">
-      <td><span class="tag ${d.status === 'success' ? 'tag-ok' : d.status === 'failed' ? 'tag-err' : 'tag-warn'}">${esc(DELIVERY_LABEL[d.status] || d.status)}</span></td>
+      <td><span class="tag ${d.status === 'success' ? 'tag-ok' : d.status === 'failed' ? 'tag-err' : d.status === 'held' || d.status === 'retry' ? 'tag-warn' : ''}">${esc(DELIVERY_LABEL[d.status] || d.status)}</span></td>
       <td class="nowrap">${esc(EVENT_LABEL[d.event] || d.event)}</td>
       <td class="mono truncate">${esc(d.subject || '—')}</td>
       <td class="dim">${esc(d.channel || '—')}</td>
-      <td class="dim mono nowrap" title="${esc(d.note || '')}">${d.code ? esc(String(d.code)) : '—'} × ${num(d.attempts)}${d.note ? ' ⚠' : ''}</td>
+      <td class="dim" title="${esc(d.note || '')}">${deliveryDetail(d)}</td>
       <td class="dim mono nowrap">${fmtDate(d.created_at)}</td>
       <td>${d.status === 'failed' ? '<button class="btn btn-ghost btn-sm" data-retry data-writes>重发</button>' : ''}</td>
     </tr>`,
@@ -3613,7 +3633,7 @@ async function viewNotify(root) {
     <section class="card">
       <div class="card-head"><h2>投递记录</h2><span class="tag">最近 12 条</span></div>
       <div class="table-wrap"><table class="tbl-notify deliveries">
-        <thead><tr><th>结果</th><th>事件</th><th>主体</th><th>渠道</th><th>状态码 × 次数</th><th>时间</th><th></th></tr></thead>
+        <thead><tr><th>结果</th><th>事件</th><th>主体</th><th>渠道</th><th>状态 / 次数</th><th>时间</th><th></th></tr></thead>
         <tbody>${delRows}</tbody>
       </table></div>
       <div class="card-body">
@@ -3621,8 +3641,10 @@ async function viewNotify(root) {
           <dt>已送达</dt><dd>${num(health.success)}</dd>
           <dt>重试中</dt><dd>${num(health.retry)}</dd>
           <dt>失败</dt><dd>${health.failed ? `<span class="tag tag-err">${num(health.failed)}</span>` : '0'}</dd>
+          <dt>静默待发</dt><dd>${health.held ? `<span class="tag tag-warn">${num(health.held)}</span>` : '0'}</dd>
+          <dt>静默未发</dt><dd>${health.dropped ? num(health.dropped) : '0'}</dd>
         </dl>
-        <p class="hint">失败会退避重试两次（5 秒、30 秒）。三次都没送到就停下，把原因留在这里等人处理——无限重试只会把接收端和我们自己都拖住。</p>
+        <p class="hint">失败会退避重试两次（5 秒、30 秒）。三次都没送到就停下，把原因留在这里等人处理——无限重试只会把接收端和我们自己都拖住。标「静默待发」的记录是静默期内攒下的，时段结束后会合成一条摘要发出。</p>
       </div>
     </section>
   </div>`;
@@ -3648,7 +3670,28 @@ async function viewNotify(root) {
         </div>
       </div>
       <div class="field"><label>签名密钥（可选）</label><input id="nc-secret" value="" placeholder="${channel?.hasSecret ? '已设置，留空表示不改' : '留空则不签名'}">
-        <p class="hint">配了之后每个请求都会带 HMAC-SHA256 签名头，接收端可以验签</p></div>`;
+        <p class="hint">配了之后每个请求都会带 HMAC-SHA256 签名头，接收端可以验签</p></div>
+      <div class="field"><label>静默时段（可选）</label>
+        <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap">
+          <input id="nc-quiet-from" value="${esc(channel?.quiet?.from || '')}" placeholder="22:00" style="max-width:110px" inputmode="numeric">
+          <span class="muted">到</span>
+          <input id="nc-quiet-to" value="${esc(channel?.quiet?.to || '')}" placeholder="08:00" style="max-width:110px" inputmode="numeric">
+          <select id="nc-quiet-policy" style="max-width:220px">
+            ${Object.entries(QUIET_POLICY_LABEL).map(([k, l]) => `<option value="${k}" ${(channel?.quiet?.policy || 'digest') === k ? 'selected' : ''}>${l}</option>`).join('')}
+          </select>
+        </div>
+        <p class="hint">服务器本地时间，跨夜直接填（22:00 到 08:00）。留空表示不静默。静默不是丢弃：选「合并补发」时，攒下的通知会在时段结束后合成一条摘要发出来；两格填成一样会被当成没设置，避免手滑变成全天静默</p>
+      </div>
+      <div class="field"><label>静默期内也照常推的事件</label>
+        <div class="row" style="gap:10px;flex-wrap:wrap">
+          ${result.events
+            .map(
+              (e) => `<label class="switch"><input type="checkbox" data-pierce="${e.key}" ${(channel?.quiet?.pierce || []).includes(e.key) ? 'checked' : ''}><span>${esc(e.label)}</span></label>`,
+            )
+            .join('')}
+        </div>
+        <p class="hint">备份失败这类「等到早上已经晚了」的事件可以单独放行；不勾就是全部遵守静默</p>
+      </div>`;
   };
 
   const submitChannel = async (mask, id) => {
@@ -3662,6 +3705,12 @@ async function viewNotify(root) {
     };
     const secret = $('#nc-secret', mask).value;
     if (secret) body.secret = secret;
+    body.quiet = {
+      from: $('#nc-quiet-from', mask).value.trim(),
+      to: $('#nc-quiet-to', mask).value.trim(),
+      policy: $('#nc-quiet-policy', mask).value,
+      pierce: $$('[data-pierce]', mask).filter((el) => el.checked).map((el) => el.dataset.pierce),
+    };
     if (id) await api(`/admin/api/notify/channels/${id}`, { method: 'PATCH', body });
     else await api('/admin/api/notify/channels', { method: 'POST', body });
     toast(id ? '渠道已更新' : '渠道已创建', 'ok');

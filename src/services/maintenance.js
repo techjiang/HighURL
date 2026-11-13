@@ -13,6 +13,9 @@ export function startMaintenance(ctx) {
   let healthBusy = false;
   // 到期提醒按天推一次就够。挂在 30s 心跳上不设闸，等于每半分钟提醒一遍同一件事
   let lastExpireDay = '';
+  // 静默期结束要补发。挂在 30s 心跳上没问题：releaseHeld 没东西可放时立刻返回，
+  // 而且它自己会看「现在是否仍在静默期」，改时段后也不会提前放出来
+  let quietBusy = false;
 
   const tick = async () => {
     try {
@@ -24,6 +27,7 @@ export function startMaintenance(ctx) {
       cleanup();
       maybeHealthCheck();
       maybeNotifyExpiring();
+      releaseQuiet();
     } catch (err) {
       logger.error('[maintenance]', err);
     }
@@ -152,6 +156,27 @@ export function startMaintenance(ctx) {
     });
   }
 
+  /**
+   * 静默时段结束就补发。静默期内的通知在 emit 时就挂进库里了，
+   * 这里只负责挑一个「已经不在静默期」的时刻把攒下的一批合成一条发出去。
+   */
+  function releaseQuiet() {
+    if (quietBusy || !ctx.notify?.releaseHeld) return { released: 0, dropped: 0 };
+    quietBusy = true;
+    try {
+      const out = ctx.notify.releaseHeld();
+      if (out.released || out.dropped) {
+        logger.info?.(`[notify] 静默结束，补发 ${out.released} 条${out.dropped ? `，丢弃 ${out.dropped} 条` : ''}`);
+      }
+      return out;
+    } catch (err) {
+      logger.warn?.('[notify] 静默补发失败', err?.message || err);
+      return { released: 0, dropped: 0 };
+    } finally {
+      quietBusy = false;
+    }
+  }
+
   function cleanup() {
     const retention = Number(settings.get('retentionDays')) || 0;
     if (retention > 0) {
@@ -216,6 +241,7 @@ export function startMaintenance(ctx) {
     purgeTrash,
     maybeHealthCheck,
     maybeNotifyExpiring,
+    releaseQuiet,
   };
 }
 

@@ -418,6 +418,39 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_deliveries_dedupe ON notify_deliveries(channel_id, event, subject, created_at);
     `);
   },
+  /**
+   * v13：通知的静默时段。
+   *
+   * 上一版能推通知了，但推送不看时间：凌晨三点的一条死链提醒，除了让人
+   * 第二天关掉通知以外没有别的作用。而「关掉通知」是不可逆的坏结果——
+   * 之后真正的故障也没人知道了。
+   *
+   * 所以静默期不丢事件，只推迟；结束时把攒下的一批合成一条摘要补发。
+   * 四条设计取舍：
+   * - **存「几点到几点」而不是时间戳**：静默是每天的规律，不是一个具体时刻。
+   *   存成 `HH:MM` 两列，跨夜（22:00→08:00）自然成立，读起来也一眼明白
+   * - **用服务器本地时间**：自托管站的服务器时区就是站点所在时区，
+   *   引一套时区库只为了算「现在几点」不值得
+   * - **补发采用「合并」而不是「逐条重放」**：静默两小时攒下 40 条，
+   *   早上一起推 40 条和夜里推 40 条一样烦人。合并成一条摘要，点进去就是列表
+   * - **可以按事件穿透**：备份失败这类「等到早上已经晚了」的事件，
+   *   允许指定它绕过静默。开关交给配的人，不预设哪种事件更重要
+   */
+  function v13(db) {
+    const existing = new Set(db.prepare('PRAGMA table_info(notify_channels)').all().map((c) => c.name));
+    const columns = [
+      ['quiet_from', "TEXT NOT NULL DEFAULT ''"],
+      ['quiet_to', "TEXT NOT NULL DEFAULT ''"],
+      // digest：攒到静默结束后合并补发；drop：静默期内直接不发
+      ['quiet_policy', "TEXT NOT NULL DEFAULT 'digest'"],
+      ['quiet_pierce', "TEXT NOT NULL DEFAULT ''"],
+    ];
+    for (const [name, type] of columns) {
+      if (!existing.has(name)) db.exec(`ALTER TABLE notify_channels ADD COLUMN ${name} ${type}`);
+    }
+    // 静默结束时要扫「还挂着没发的」，得按状态找
+    db.exec("CREATE INDEX IF NOT EXISTS idx_deliveries_held ON notify_deliveries(status, channel_id)");
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -533,6 +566,13 @@ export class Store {
       finishDelivery: prepare('UPDATE notify_deliveries SET status = ?, attempts = ?, code = ?, note = ?, done_at = ? WHERE id = ?'),
       listDeliveries: prepare('SELECT * FROM notify_deliveries ORDER BY id DESC LIMIT ?'),
       deleteChannelDeliveries: prepare('DELETE FROM notify_deliveries WHERE channel_id = ?'),
+      // 静默时段：四个字段单独一条，创建渠道时也走它，
+      // 免得 INSERT 的列序跟着这组可选配置一起变
+      setChannelQuiet: prepare('UPDATE notify_channels SET quiet_from = ?, quiet_to = ?, quiet_policy = ?, quiet_pierce = ? WHERE id = ?'),
+      // 静默期攒下的：静默结束后要合并补发，所以得能把它们捞出来
+      heldDeliveries: prepare("SELECT * FROM notify_deliveries WHERE status = 'held' ORDER BY id"),
+      heldCountByChannel: prepare("SELECT channel_id, event, COUNT(*) AS n FROM notify_deliveries WHERE status = 'held' GROUP BY channel_id, event"),
+      dropHeld: prepare("DELETE FROM notify_deliveries WHERE status = 'held'"),
       getReport: prepare('SELECT * FROM reports WHERE id = ?'),
       // 短链可能已被彻底删除，所以是 LEFT JOIN：举报记录要比短链活得久
       listReports: prepare(`SELECT r.*, l.title AS link_title, l.url AS link_url, l.status AS link_status

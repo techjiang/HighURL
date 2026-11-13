@@ -24,7 +24,7 @@ import { maskIp } from '../services/stream.js';
 import { buildDigest } from '../services/insights.js';
 import { inspectBackup, restoreBackup } from '../services/restore.js';
 import { buildBackup, listBackups, backupPath, verifyBackup, KEEP_AUTO_BACKUPS } from '../services/backup.js';
-import { EVENTS, KINDS } from '../services/notify.js';
+import { EVENTS, KINDS, QUIET_POLICIES, inQuietHours } from '../services/notify.js';
 
 /**
  * 热点榜的字段名统一成 camelCase 再出门。
@@ -942,9 +942,15 @@ export function registerAdminRoutes(router, ctx) {
   router.get('/admin/api/notify/channels', (req, res) =>
     api(req, res, () => ({
       result: {
-        items: ctx.notify.listChannels(),
+        // 每个渠道带上「现在是否处于静默」：配了时段却看不出当前生效与否，
+        // 排查「怎么没收到」时最费时间
+        items: ctx.notify.listChannels().map((c) => ({
+          ...c,
+          quietActive: inQuietHours(c.quiet?.from, c.quiet?.to),
+        })),
         events: Object.entries(EVENTS).map(([key, label]) => ({ key, label })),
         kinds: Object.entries(KINDS).map(([key, label]) => ({ key, label })),
+        policies: Object.entries(QUIET_POLICIES).map(([key, label]) => ({ key, label })),
       },
     })),
   );
@@ -959,7 +965,8 @@ export function registerAdminRoutes(router, ctx) {
         throw new HttpError(400, err.message, 'channel_invalid');
       }
       links.audit(me.username, 'notify.channel_create', `${channel.id} ${channel.name}`);
-      return { result: channel };
+      // 创建 / 修改也回一份「现在是否静默中」：让界面立刻显示对，而不是等下一次刷新
+      return { result: { ...channel, quietActive: inQuietHours(channel.quiet?.from, channel.quiet?.to) } };
     }),
   );
 
@@ -973,7 +980,7 @@ export function registerAdminRoutes(router, ctx) {
         throw new HttpError(400, err.message, 'channel_invalid');
       }
       links.audit(me.username, 'notify.channel_update', `${params.id} ${channel.name}`);
-      return { result: channel };
+      return { result: { ...channel, quietActive: inQuietHours(channel.quiet?.from, channel.quiet?.to) } };
     }),
   );
 
