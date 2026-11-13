@@ -24,6 +24,7 @@ import { maskIp } from '../services/stream.js';
 import { buildDigest } from '../services/insights.js';
 import { inspectBackup, restoreBackup } from '../services/restore.js';
 import { buildBackup, listBackups, backupPath, verifyBackup, KEEP_AUTO_BACKUPS } from '../services/backup.js';
+import { EVENTS, KINDS } from '../services/notify.js';
 
 /**
  * 热点榜的字段名统一成 camelCase 再出门。
@@ -933,6 +934,98 @@ export function registerAdminRoutes(router, ctx) {
       cache.invalidate();
       links.audit(me.username, 'settings.update', Object.keys(applied).join(','));
       return { result: settings.all(), applied, rejected };
+    }),
+  );
+
+
+  /* ---------- 通知 ---------- */
+  router.get('/admin/api/notify/channels', (req, res) =>
+    api(req, res, () => ({
+      result: {
+        items: ctx.notify.listChannels(),
+        events: Object.entries(EVENTS).map(([key, label]) => ({ key, label })),
+        kinds: Object.entries(KINDS).map(([key, label]) => ({ key, label })),
+      },
+    })),
+  );
+
+  router.post('/admin/api/notify/channels', (req, res) =>
+    api(req, res, async (me, req) => {
+      const body = await parseJsonBody(req, ctx.config.maxBodyBytes);
+      let channel;
+      try {
+        channel = ctx.notify.createChannel(body);
+      } catch (err) {
+        throw new HttpError(400, err.message, 'channel_invalid');
+      }
+      links.audit(me.username, 'notify.channel_create', `${channel.id} ${channel.name}`);
+      return { result: channel };
+    }),
+  );
+
+  router.patch('/admin/api/notify/channels/:id', (req, res, params) =>
+    api(req, res, async (me, req) => {
+      const body = await parseJsonBody(req, ctx.config.maxBodyBytes);
+      let channel;
+      try {
+        channel = ctx.notify.updateChannel(Number(params.id), body);
+      } catch (err) {
+        throw new HttpError(400, err.message, 'channel_invalid');
+      }
+      links.audit(me.username, 'notify.channel_update', `${params.id} ${channel.name}`);
+      return { result: channel };
+    }),
+  );
+
+  router.delete('/admin/api/notify/channels/:id', (req, res, params) =>
+    api(req, res, (me) => {
+      const removed = ctx.notify.deleteChannel(Number(params.id));
+      if (!removed) throw new HttpError(404, '渠道不存在', 'channel_not_found');
+      links.audit(me.username, 'notify.channel_delete', params.id);
+      return { result: { removed } };
+    }),
+  );
+
+  /**
+   * 测试推送：把结果直接还给界面。
+   * 「配好了但对方拒收」是这套东西最常见的失败，测试按钮必须给出
+   * 状态码和响应正文，而不是只说一句「已发送」
+   */
+  router.post('/admin/api/notify/channels/:id/test', (req, res, params) =>
+    api(req, res, async (me) => {
+      let out;
+      try {
+        out = await ctx.notify.test(Number(params.id));
+      } catch (err) {
+        throw new HttpError(400, err.message, 'channel_test_failed');
+      }
+      links.audit(me.username, 'notify.test', `${params.id}:${out.ok ? 'ok' : out.status}`);
+      return { result: out };
+    }),
+  );
+
+  router.get('/admin/api/notify/deliveries', (req, res) =>
+    api(req, res, () => {
+      const q = new URL(req.url, 'http://x').searchParams;
+      return {
+        result: ctx.notify.deliveries({
+          limit: Number(q.get('limit')) || 30,
+          status: String(q.get('status') || ''),
+        }),
+      };
+    }),
+  );
+
+  router.post('/admin/api/notify/deliveries/:id/retry', (req, res, params) =>
+    api(req, res, (me) => {
+      let out;
+      try {
+        out = ctx.notify.retry(Number(params.id));
+      } catch (err) {
+        throw new HttpError(400, err.message, 'retry_failed');
+      }
+      links.audit(me.username, 'notify.retry', params.id);
+      return { result: out };
     }),
   );
 

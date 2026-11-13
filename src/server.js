@@ -22,6 +22,7 @@ import { HealthChecker } from './services/health.js';
 import { TargetService } from './services/targets.js';
 import { VisitStream } from './services/stream.js';
 import { HistoryService } from './services/history.js';
+import { NotifyService } from './services/notify.js';
 
 import { createRedirectHandler, handlePasswordSubmit, handleReportSubmit, verifyAccess, accessCookie } from './routes/redirect.js';
 import { ReportBox } from './services/reports.js';
@@ -88,7 +89,9 @@ export async function createServer(options = {}) {
   const deduper = new ClickDeduper({ maxKeys: Math.max(1000, Number(settings.get('countCacheMax')) || 20000) });
   const cache = new LinkCache(store, { ttlMs: 30000, max: 20000 });
   const reports = new ReportBox(store);
-  const health = new HealthChecker({ store, settings, logger });
+  // 通知服务要在巡检之前建好：巡检、举报、备份失败都要往它这儿发事件
+  const notify = new NotifyService({ store, settings, logger });
+  const health = new HealthChecker({ store, settings, logger, notify });
   const stream = new VisitStream();
   // 历史服务要能失效跳转缓存：回滚之后缓存里的旧链接必须立刻不可见
   history.cache = cache;
@@ -113,6 +116,7 @@ export async function createServer(options = {}) {
     health,
     stream,
     history,
+    notify,
     limiter,
     createLimiter,
     secret,

@@ -6,6 +6,7 @@ import { renderInterstitial } from '../pages/landing-page.js';
 import { accentOfStyle } from '../services/qr-style.js';
 import { countryOf, pickTarget } from '../services/targets.js';
 import { qrSvg } from '../services/qr.js';
+import { REASON_LABEL } from '../services/reports.js';
 import { shortUrl } from './public.js';
 
 const SUFFIX_IGNORE = new Set(['favicon.ico', 'robots.txt', 'sitemap.xml']);
@@ -287,6 +288,14 @@ export async function handleReportSubmit(ctx, req, res, body) {
     note: body.note,
     ip,
     ua: req.headers['user-agent'] || '',
+  });
+  // 举报是最需要有人立刻知道的一类事件：它的价值全在「被看见」上。
+  // 正文不往通知里带——那是匿名访问者写的，原样转发到群里等于替对方发言
+  ctx.notify?.emit('report.new', {
+    subject: link.code,
+    text: `短链 /${link.code} 收到一条举报（${REASON_LABEL[ctx.reports.normalize(body.reason)] || '其它问题'}）`,
+    link: `${String(ctx.settings.get('baseUrl') || '').replace(/\/+$/, '')}/admin#/reports`,
+    data: { code: link.code, reason: ctx.reports.normalize(body.reason) },
   });
   // 回名片页给一句确认就行，不新开「举报成功」页：这条路径不该比短链本身更显眼
   redirect(res, `/${encodeURIComponent(link.code)}+?reported=1`, 303);

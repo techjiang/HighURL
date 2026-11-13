@@ -119,6 +119,12 @@ function head(url, timeout) {
   });
 }
 
+/** 通知里给人点得动的完整短链地址 */
+function shortUrlOf(settings, code) {
+  const base = String(settings.get('baseUrl') || '').replace(/\/+$/, '');
+  return base ? `${base}/${code}` : `/${code}`;
+}
+
 /** 判定：连续失败达到阈值才算死链，别把一次抖动写成故障 */
 export function classify(result, previousMiss, threshold = 2) {
   if (result.ok) return { status: 'ok', miss: 0 };
@@ -131,11 +137,13 @@ export function classify(result, previousMiss, threshold = 2) {
  * 并发压在小范围（默认 6），不至于把自己当成 DDoS，也不会让一次巡检拖上几分钟。
  */
 export class HealthChecker {
-  constructor({ store, settings, logger = console, probe = probeUrl } = {}) {
+  constructor({ store, settings, logger = console, probe = probeUrl, notify = null } = {}) {
     this.store = store;
     this.settings = settings;
     this.logger = logger;
     this.probe = probe;
+    // 通知是可选的：巡检本身跑起来不依赖它，测试里也不用凑一个真的推送通道
+    this.notify = notify;
     this.running = null;
     this.lastRun = null;
   }
@@ -188,7 +196,7 @@ export class HealthChecker {
       while (queue.length) {
         const row = queue.shift();
         const previous = row.target
-          ? this.store.db.prepare('SELECT health_miss FROM link_targets WHERE id = ?').get(row.id)
+          ? this.store.db.prepare('SELECT health_miss, health_status FROM link_targets WHERE id = ?').get(row.id)
           : this.store.sql.getLinkByCodeAny.get(row.code);
         const probe = await this.probe(row.url, { timeout }).catch((err) => ({
           ok: false,
@@ -210,6 +218,17 @@ export class HealthChecker {
           );
         } catch (err) {
           this.logger.warn?.(`[health] 写入失败 ${row.code}: ${err.message}`);
+        }
+        // 只在「刚变成死链」时推一次。死链在下一轮巡检里还会被判死，
+        // 每次都对着一件已经知道的事发通知，人就学会忽略通知了
+        if (verdict.status === 'dead' && previous?.health_status !== 'dead') {
+          const link = row.target ? null : this.store.sql.getLinkByCodeAny.get(row.code);
+          this.notify?.emit('link.dead', {
+            subject: row.code,
+            text: `短链 /${row.code} 的目标地址连续 ${verdict.miss} 次探测失败：${probe.error || `HTTP ${probe.status}`}`,
+            link: link ? shortUrlOf(this.settings, link.code) : '',
+            data: { code: row.code, url: row.url, status: probe.status, error: probe.error || '', miss: verdict.miss, target: Boolean(row.target) },
+          });
         }
         result.checked += 1;
         if (verdict.status === 'ok') result.ok += 1;

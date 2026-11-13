@@ -26,6 +26,9 @@ const CAST = {
   healthCheckIntervalMin: Number,
   healthCheckTimeout: Number,
   historyKeep: Number,
+  notifyDedupeHours: Number,
+  notifyExpireDays: Number,
+  notifyAllowPrivate: Boolean,
   port: Number,
 };
 
@@ -147,6 +150,14 @@ export class Settings {
         const n = Number(str);
         return Number.isFinite(n) && n >= 0 && n <= 200 ? Math.floor(n) : undefined;
       }
+      case 'notifyDedupeHours': {
+        const n = Number(str);
+        return Number.isFinite(n) && n >= 0 && n <= 720 ? Math.floor(n) : undefined;
+      }
+      case 'notifyExpireDays': {
+        const n = Number(str);
+        return Number.isFinite(n) && n >= 1 && n <= 90 ? Math.floor(n) : undefined;
+      }
       case 'retentionDays': {
         const n = Number(str);
         return Number.isFinite(n) && n >= 0 && n <= 3650 ? n : undefined;
@@ -213,6 +224,7 @@ export class Settings {
       case 'allowReport':
       case 'blockBots':
       case 'trustProxy':
+      case 'notifyAllowPrivate':
       case 'allowRegistration':
         return raw === true || raw === 'true' || raw === 'on' || raw === '1';
       default:

@@ -375,6 +375,49 @@ const MIGRATIONS = [
     if (!existing.has('created_by')) db.exec("ALTER TABLE admins ADD COLUMN created_by TEXT NOT NULL DEFAULT ''");
     if (!existing.has('disabled_at')) db.exec('ALTER TABLE admins ADD COLUMN disabled_at INTEGER');
   },
+  /**
+   * v12：事件通知渠道与投递记录。
+   *
+   * 死链、举报、到期、备份失败这些事一直只活在管理台的某个页面里，
+   * 而管理员不会一直开着它——真正发现的时间往往是有人来投诉的时候。
+   *
+   * 两张表分工明确：
+   * - notify_channels 是「往哪推、推哪些事件」，人配的
+   * - notify_deliveries 是「推过了没有、成不成」，系统写的
+   *
+   * 投递记录一定要落库，不能只写日志：通知这事最典型的失败是
+   * 「我配了却没收到」，如果查不出是没发、还是发出去了对方拒绝，
+   * 那就只能靠猜。payload 一起存下来，重试时不用重新构造事件。
+   */
+  function v12(db) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS notify_channels (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name       TEXT    NOT NULL DEFAULT '',
+        url        TEXT    NOT NULL,
+        kind       TEXT    NOT NULL DEFAULT 'webhook',
+        events     TEXT    NOT NULL DEFAULT '',
+        secret     TEXT    NOT NULL DEFAULT '',
+        enabled    INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS notify_deliveries (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_id INTEGER NOT NULL,
+        event      TEXT    NOT NULL DEFAULT '',
+        subject    TEXT    NOT NULL DEFAULT '',
+        payload    TEXT    NOT NULL DEFAULT '{}',
+        status     TEXT    NOT NULL DEFAULT 'pending',
+        attempts   INTEGER NOT NULL DEFAULT 0,
+        code       INTEGER,
+        note       TEXT    NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        done_at    INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_deliveries_status ON notify_deliveries(status, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_deliveries_dedupe ON notify_deliveries(channel_id, event, subject, created_at);
+    `);
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -480,6 +523,16 @@ export class Store {
       upsertLanding: prepare(`INSERT INTO landing_views (code, day, host, views) VALUES (?, ?, ?, ?)
         ON CONFLICT(code, day, host) DO UPDATE SET views = views + excluded.views`),
       insertReport: prepare('INSERT INTO reports (code, reason, note, ip, ua, created_at) VALUES (?, ?, ?, ?, ?, ?)'),
+      listChannels: prepare('SELECT * FROM notify_channels ORDER BY id'),
+      getChannel: prepare('SELECT * FROM notify_channels WHERE id = ?'),
+      insertChannel: prepare('INSERT INTO notify_channels (name, url, kind, events, secret, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'),
+      updateChannel: prepare('UPDATE notify_channels SET name = ?, url = ?, kind = ?, events = ?, secret = ?, enabled = ? WHERE id = ?'),
+      deleteChannel: prepare('DELETE FROM notify_channels WHERE id = ?'),
+      insertDelivery: prepare(`INSERT INTO notify_deliveries (channel_id, event, subject, payload, status, attempts, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`),
+      finishDelivery: prepare('UPDATE notify_deliveries SET status = ?, attempts = ?, code = ?, note = ?, done_at = ? WHERE id = ?'),
+      listDeliveries: prepare('SELECT * FROM notify_deliveries ORDER BY id DESC LIMIT ?'),
+      deleteChannelDeliveries: prepare('DELETE FROM notify_deliveries WHERE channel_id = ?'),
       getReport: prepare('SELECT * FROM reports WHERE id = ?'),
       // 短链可能已被彻底删除，所以是 LEFT JOIN：举报记录要比短链活得久
       listReports: prepare(`SELECT r.*, l.title AS link_title, l.url AS link_url, l.status AS link_status

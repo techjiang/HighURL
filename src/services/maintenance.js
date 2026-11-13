@@ -11,6 +11,8 @@ export function startMaintenance(ctx) {
   // 间隔可能是几小时，用墙钟时间算才不会漏跑也不会重复跑
   let lastHealthAt = 0;
   let healthBusy = false;
+  // 到期提醒按天推一次就够。挂在 30s 心跳上不设闸，等于每半分钟提醒一遍同一件事
+  let lastExpireDay = '';
 
   const tick = async () => {
     try {
@@ -21,6 +23,7 @@ export function startMaintenance(ctx) {
       purgeTrash();
       cleanup();
       maybeHealthCheck();
+      maybeNotifyExpiring();
     } catch (err) {
       logger.error('[maintenance]', err);
     }
@@ -126,6 +129,29 @@ export function startMaintenance(ctx) {
       });
   }
 
+  /**
+   * 到期提醒：把「N 天内到期」的短链合成一条通知推出去。
+   *
+   * 一条链一条通知是反效果：真有 40 条快到期时，手机上会收到 40 条，
+   * 于是这个功能第二天就会被关掉。合成一条，点进去就是筛好的列表。
+   */
+  function maybeNotifyExpiring() {
+    const day = todayKey();
+    if (lastExpireDay === day) return;
+    lastExpireDay = day;
+    const days = Number(settings.get('notifyExpireDays')) || 0;
+    if (days <= 0) return;
+    const { rows } = store.expiringLinks({ days, limit: 200 });
+    if (!rows.length) return;
+    const preview = rows.slice(0, 5).map((r) => `/${r.code}`).join('、');
+    ctx.notify?.emit('link.expiring', {
+      subject: `expiring-${day}`,
+      text: `${rows.length} 条短链将在 ${days} 天内到期${rows.length > 5 ? `，包括 ${preview} 等` : `：${preview}`}`,
+      link: `${String(settings.get('baseUrl') || '').replace(/\/+$/, '')}/admin#/links?expiring=${days}`,
+      data: { days, count: rows.length, codes: rows.slice(0, 20).map((r) => r.code) },
+    });
+  }
+
   function cleanup() {
     const retention = Number(settings.get('retentionDays')) || 0;
     if (retention > 0) {
@@ -170,6 +196,13 @@ export function startMaintenance(ctx) {
       pruneBackups(config.backupDir, KEEP_AUTO_BACKUPS);
     } catch (err) {
       logger.warn('[backup] 自动备份失败', err.message);
+      // 备份失败是最静默的一种故障：站点照常跑，直到真需要恢复那天才发现没有备份。
+      // 这条通知的价值就在「在你还不需要它的时候告诉你」
+      ctx.notify?.emit('backup.failed', {
+        subject: 'auto-backup',
+        text: `自动备份失败：${err.message}`,
+        data: { dir: config.backupDir, error: String(err.message || err) },
+      });
     }
   }
 
@@ -182,6 +215,7 @@ export function startMaintenance(ctx) {
     sweepExpired,
     purgeTrash,
     maybeHealthCheck,
+    maybeNotifyExpiring,
   };
 }
 

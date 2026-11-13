@@ -2964,6 +2964,18 @@ async function viewSettings(root) {
       </div>
     </section>
     <section class="card">
+      <div class="card-head"><h2>事件通知</h2><a class="btn btn-ghost btn-sm" href="#/notify">推送渠道</a></div>
+      <div class="card-body">
+        <div class="field-row">
+          <div class="field"><label>提前多少天提醒到期</label><input data-key="notifyExpireDays" type="number" min="1" max="90" value="${v.notifyExpireDays}">
+            <p class="hint">每天最多推一条，把这一批快到期的一起说明。这个设置只影响通知，不影响列表里的到期筛选</p></div>
+          <div class="field"><label>同一事件去重窗口（小时）</label><input data-key="notifyDedupeHours" type="number" min="0" max="720" value="${v.notifyDedupeHours}">
+            <p class="hint">死链每轮巡检都会被再判一次，同一渠道同一主体在窗口内只推一次；0 表示不去重</p></div>
+        </div>
+        ${bool('notifyAllowPrivate', '允许推送到内网地址', '默认关。接收端地址是管理员填的，但一个填错的地址不该让本站变成探测内网的跳板；自建接收端再打开')}
+      </div>
+    </section>
+    <section class="card">
       <div class="card-head"><h2>性能</h2></div>
       <div class="card-body">
         <div class="field-row">
@@ -3522,7 +3534,193 @@ async function viewReports(root) {
   );
 }
 
-/* ---------- 路由 ---------- */
+
+/* ---------- 视图：事件通知 ---------- */
+const EVENT_LABEL = {
+  'link.dead': '短链变成死链',
+  'link.expiring': '短链即将到期',
+  'report.new': '收到新的举报',
+  'backup.failed': '自动备份失败',
+};
+const DELIVERY_LABEL = { success: '已送达', failed: '失败', retry: '重试中', pending: '排队中' };
+
+async function viewNotify(root) {
+  const { result } = await api('/admin/api/notify/channels');
+  const del = await api('/admin/api/notify/deliveries?limit=12');
+  const channels = result.items;
+  const health = del.result.counts;
+
+  const eventChips = (channel) =>
+    channel.events.map((e) => `<span class="tag">${esc(EVENT_LABEL[e] || e)}</span>`).join(' ');
+
+  const channelRows = channels.length
+    ? channels
+        .map(
+          (c) => `<tr data-id="${c.id}" class="${c.enabled ? '' : 'row-dim'}">
+      <td>
+        <div class="hot-title">${esc(c.name)}${c.hasSecret ? ' <span class="tag tag-brand">已签名</span>' : ''}</div>
+        <div class="muted mono truncate" style="font-size:12px">${esc(c.url)}</div>
+      </td>
+      <td><span class="tag">${esc(result.kinds.find((k) => k.key === c.kind)?.label || c.kind)}</span></td>
+      <td>${eventChips(c)}</td>
+      <td>${c.enabled ? '<span class="tag tag-ok">启用</span>' : '<span class="tag">停用</span>'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-ghost btn-sm" data-test>测试</button>
+        <button class="btn btn-ghost btn-sm" data-toggle data-writes>${c.enabled ? '停用' : '启用'}</button>
+        <button class="btn btn-ghost btn-sm" data-edit data-writes>编辑</button>
+        <button class="btn btn-ghost btn-sm" data-del data-writes>删除</button>
+      </td>
+    </tr>`,
+        )
+        .join('')
+    : `<tr><td colspan="5"><div class="empty"><b>还没有通知渠道</b><span class="muted">配一个之后，死链、举报、到期、备份失败会主动推给你</span></div></td></tr>`;
+
+  const delRows = del.result.items.length
+    ? del.result.items
+        .map(
+          (d) => `<tr class="del-row st-${esc(d.status)}" data-did="${d.id}">
+      <td><span class="tag ${d.status === 'success' ? 'tag-ok' : d.status === 'failed' ? 'tag-err' : 'tag-warn'}">${esc(DELIVERY_LABEL[d.status] || d.status)}</span></td>
+      <td class="nowrap">${esc(EVENT_LABEL[d.event] || d.event)}</td>
+      <td class="mono truncate">${esc(d.subject || '—')}</td>
+      <td class="dim">${esc(d.channel || '—')}</td>
+      <td class="dim mono nowrap" title="${esc(d.note || '')}">${d.code ? esc(String(d.code)) : '—'} × ${num(d.attempts)}${d.note ? ' ⚠' : ''}</td>
+      <td class="dim mono nowrap">${fmtDate(d.created_at)}</td>
+      <td>${d.status === 'failed' ? '<button class="btn btn-ghost btn-sm" data-retry data-writes>重发</button>' : ''}</td>
+    </tr>`,
+        )
+        .join('')
+    : `<tr><td colspan="7"><div class="empty"><b>还没有投递记录</b><span class="muted">加上渠道、点一次测试就有了</span></div></td></tr>`;
+
+  root.innerHTML = `
+  <div class="topbar"><div><h1>事件通知</h1><div class="sub">事情发生时主动推给你，不用一直盯着这一页</div></div>
+    <span class="spacer"></span>
+    <span class="tag ${health.failed ? 'tag-err' : 'tag-ok'}">失败 ${num(health.failed)}</span>
+    <button class="btn btn-primary btn-sm" id="add-channel" data-writes>${ic('plus')} 新建渠道</button>
+  </div>
+
+  <div class="stack">
+    <section class="card">
+      <div class="card-head"><h2>推送渠道</h2><span class="tag">${num(channels.length)} 个</span></div>
+      <div class="table-wrap"><table class="tbl-notify channels">
+        <thead><tr><th>渠道</th><th>类型</th><th>订阅事件</th><th>状态</th><th></th></tr></thead>
+        <tbody>${channelRows}</tbody>
+      </table></div>
+      <div class="card-body">
+        <p class="hint">通用 Webhook 走 POST JSON，带 <code>X-HighURL-Signature: sha256=HMAC(secret, "时间戳.报文")</code>，接收端可据此确认来源并拒绝重放；Slack / 飞书 / 钉钉会自动转换成各自的 text 格式。</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>投递记录</h2><span class="tag">最近 12 条</span></div>
+      <div class="table-wrap"><table class="tbl-notify deliveries">
+        <thead><tr><th>结果</th><th>事件</th><th>主体</th><th>渠道</th><th>状态码 × 次数</th><th>时间</th><th></th></tr></thead>
+        <tbody>${delRows}</tbody>
+      </table></div>
+      <div class="card-body">
+        <dl class="kv">
+          <dt>已送达</dt><dd>${num(health.success)}</dd>
+          <dt>重试中</dt><dd>${num(health.retry)}</dd>
+          <dt>失败</dt><dd>${health.failed ? `<span class="tag tag-err">${num(health.failed)}</span>` : '0'}</dd>
+        </dl>
+        <p class="hint">失败会退避重试两次（5 秒、30 秒）。三次都没送到就停下，把原因留在这里等人处理——无限重试只会把接收端和我们自己都拖住。</p>
+      </div>
+    </section>
+  </div>`;
+
+  const channelForm = (channel) => {
+    const picked = new Set(channel?.events || []);
+    return `
+      <div class="field"><label>名称</label><input id="nc-name" value="${esc(channel?.name || '')}" placeholder="例如：运维群"></div>
+      <div class="field"><label>地址</label><input id="nc-url" value="${esc(channel?.url || '')}" placeholder="https://hooks.example.com/highurl">
+        <p class="hint">只接受 http(s)。指向内网默认会被拦下，自建接收端请在系统设置里打开「允许推送到内网」</p></div>
+      <div class="field"><label>类型</label>
+        <select id="nc-kind">
+          ${result.kinds.map((k) => `<option value="${k.key}" ${channel?.kind === k.key ? 'selected' : ''}>${esc(k.label)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>订阅事件</label>
+        <div class="row" style="gap:10px;flex-wrap:wrap">
+          ${result.events
+            .map(
+              (e) => `<label class="switch"><input type="checkbox" data-ev="${e.key}" ${picked.has(e.key) ? 'checked' : ''}><span>${esc(e.label)}</span></label>`,
+            )
+            .join('')}
+        </div>
+      </div>
+      <div class="field"><label>签名密钥（可选）</label><input id="nc-secret" value="" placeholder="${channel?.hasSecret ? '已设置，留空表示不改' : '留空则不签名'}">
+        <p class="hint">配了之后每个请求都会带 HMAC-SHA256 签名头，接收端可以验签</p></div>`;
+  };
+
+  const submitChannel = async (mask, id) => {
+    const events = $$('[data-ev]', mask).filter((el) => el.checked).map((el) => el.dataset.ev);
+    if (!events.length) throw new Error('至少要勾选一个事件');
+    const body = {
+      name: $('#nc-name', mask).value,
+      url: $('#nc-url', mask).value,
+      kind: $('#nc-kind', mask).value,
+      events,
+    };
+    const secret = $('#nc-secret', mask).value;
+    if (secret) body.secret = secret;
+    if (id) await api(`/admin/api/notify/channels/${id}`, { method: 'PATCH', body });
+    else await api('/admin/api/notify/channels', { method: 'POST', body });
+    toast(id ? '渠道已更新' : '渠道已创建', 'ok');
+  };
+
+  $('#add-channel').addEventListener('click', () => {
+    modal({ title: '新建推送渠道', bodyHtml: channelForm(null), confirmText: '创建', onConfirm: (mask) => submitChannel(mask, null) });
+  });
+
+  $$('tr[data-id]').forEach((tr) => {
+    const id = tr.dataset.id;
+    const channel = channels.find((c) => Number(c.id) === Number(id));
+    tr.querySelector('[data-edit]')?.addEventListener('click', () => {
+      modal({ title: '编辑推送渠道', bodyHtml: channelForm(channel), onConfirm: (mask) => submitChannel(mask, id) });
+    });
+    tr.querySelector('[data-toggle]')?.addEventListener('click', async () => {
+      await api(`/admin/api/notify/channels/${id}`, { method: 'PATCH', body: { enabled: !channel.enabled } });
+      render();
+    });
+    tr.querySelector('[data-test]')?.addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      const label = e.target.textContent;
+      e.target.textContent = '发送中…';
+      try {
+        const { result: r } = await api(`/admin/api/notify/channels/${id}/test`, { method: 'POST' });
+        // 状态码和对方的话都要露出来：只报「已发送」等于把真正的失败藏了
+        toast(r.ok ? '测试通知已送达' : `对方拒收：${r.status || '无响应'} ${r.note || ''}`, r.ok ? 'ok' : 'err');
+        render();
+      } catch (err) {
+        toast(err.message, 'err');
+        e.target.disabled = false;
+        e.target.textContent = label;
+      }
+    });
+    tr.querySelector('[data-del]')?.addEventListener('click', () => {
+      confirmDialog('删除渠道', `删除「${channel.name}」后，它订阅的事件不会再推送。已有的投递记录也会一起清掉。`, async () => {
+        await api(`/admin/api/notify/channels/${id}`, { method: 'DELETE' });
+        toast('渠道已删除', 'ok');
+        render();
+      }, { confirmText: '删除' });
+    });
+  });
+
+  $$('tr[data-did] [data-retry]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.closest('tr').dataset.did;
+      btn.disabled = true;
+      try {
+        await api(`/admin/api/notify/deliveries/${id}/retry`, { method: 'POST' });
+        toast('已重新入队', 'ok');
+        setTimeout(render, 900);
+      } catch (err) {
+        toast(err.message, 'err');
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
 /* ---------- 视图：账号管理 ---------- */
 const ROLE_LABEL = { owner: '管理员', viewer: '只读' };
 
@@ -3646,6 +3844,7 @@ const VIEWS = {
   audit: viewAudit,
   backup: viewBackup,
   trash: viewTrash,
+  notify: viewNotify,
   settings: viewSettings,
   accounts: viewAccounts,
 };

@@ -56,6 +56,14 @@
 | --- | --- |
 | ![死链巡检](docs/screenshots/links-health.png) | ![数据自检](docs/screenshots/doctor.png) |
 
+| 事件通知（渠道 / 投递记录） | 新建渠道（事件订阅 / 签名） |
+| --- | --- |
+| ![事件通知](docs/screenshots/notify.png) | ![新建渠道](docs/screenshots/notify-modal.png) |
+
+| 事件通知（手机） |
+| --- |
+| ![事件通知移动端](docs/screenshots/notify-mobile.png) |
+
 | 二维码下载（单条 / 批量） | 拼版打印（A4 网格 PDF） |
 | --- | --- |
 | ![二维码](docs/screenshots/qr-modal.png) | ![拼版打印](docs/screenshots/qr-sheet.png) |
@@ -246,6 +254,7 @@
 | 变更历史 | 改短链、改密码、删除、回滚前都留一版快照，能看某条短链当时长什么样，也能一键回滚到任意一版；回滚前再记一版，滚错还能滚回来；默认每条留 20 版，条数可调，0 表示不留 |
 | 版本对比 | 任一历史版本都能和「现在」逐字段对比：目标地址、标题、备注、标签、状态、分组、有效期、分流目标（按 URL 加删）；窄屏下折成上下两行带「这一版 / 现在」前缀 |
 | 数据自检 | 一眼看孤儿统计、短码冲突、数据库版本，确认无误再一键清理 |
+| 事件通知 | 死链、举报、即将到期、备份失败这四件事发生时，主动推到你手上，不用一直盯着管理台。支持通用 Webhook（带 HMAC 签名）、Slack、飞书、钉钉；同一件事在窗口内只推一次，到期提醒合成每日一条汇总；发失败按 5 秒、30 秒退避重试两次，三次都失败就留底等人看，不无限重试 |
 | 可观测 | `/health` 健康检查、`/metrics` Prometheus 指标，含去重跳过数 |
 | 零依赖部署 | 单进程 + 单文件，无 Redis、无 MySQL、无构建步骤 |
 
@@ -417,6 +426,29 @@ curl -X PUT https://s.example.com/admin/api/links/sale/qr-style \
   -H "Authorization: Bearer hu_xxx" -H "Content-Type: application/json" \
   -d '{"qrStyle":{"preset":"brand","dotStyle":"rounded","ecc":"M"}}'
 ```
+
+### 事件通知
+
+```bash
+# 建渠道：kind 取 webhook / slack / feishu / dingtalk
+curl -X POST https://s.example.com/admin/api/notify/channels \
+  -H "Authorization: Bearer hu_xxx" -H "Content-Type: application/json" \
+  -d '{"name":"运维群","url":"https://hooks.example.com/x","kind":"feishu",
+       "events":["link.dead","backup.failed"],"secret":"shared-key"}'
+
+curl https://s.example.com/admin/api/notify/channels   # 列表（不回传 secret）
+curl -X POST https://s.example.com/admin/api/notify/channels/1/test   # 发一条测试
+curl https://s.example.com/admin/api/notify/deliveries?limit=50       # 投递记录
+curl -X POST https://s.example.com/admin/api/notify/deliveries/12/retry  # 手动重发
+```
+
+`events` 只认 `link.dead`、`link.expiring`、`report.new`、`backup.failed`。
+配了 `secret` 之后，每个请求带 `X-HighURL-Signature: sha256=<hmac>` 与
+`X-HighURL-Timestamp`，签名内容是 `<timestamp>.<body>`，接收端按同样方式算一遍即可验签，
+顺便拒绝时间戳过旧的请求防重放。举报通知只带短码与类型，**不带匿名正文**。
+
+指向内网的地址默认会被拦下（防 SSRF）；接收端就在自己内网时，到设置里打开
+「允许推送到内网」。
 
 `landing.theme` 只认 `auto` / `dark` / `light`，其它值会回落到 `auto` 而不是原样写库；
 `qrStyle` 逐字段白名单校验，坏值直接 400，不会把一条短链的导出链路带坏。

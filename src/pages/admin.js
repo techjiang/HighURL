@@ -71,6 +71,7 @@ const ICON = {
   funnel: '<path d="M4 5h16l-6 7v6l-4 2v-8z"/>',
   report: '<path d="M12 4l8 15H4zM12 10v4M12 16.5v.5"/>',
   accounts: '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c0-3 2.5-5 5.5-5s5.5 2 5.5 5M17 11.5a2.6 2.6 0 1 0 0-5.2M17.5 14.5c2 .5 3.5 2.3 3.5 4.5"/>',
+  notify: '<path d="M18 15v-5a6 6 0 1 0-12 0v5l-2 3h16l-2-3M10 21h4"/>',
 };
 
 const NAV = [
@@ -87,6 +88,7 @@ const NAV = [
   ['audit', '审计日志'],
   ['backup', '备份恢复'],
   ['trash', '回收站'],
+  ['notify', '通知'],
   ['accounts', '账号'],
   ['settings', '系统设置'],
 ];
