@@ -560,7 +560,7 @@ Logo 源文件在 `assets/`，都是纯 SVG、透明底，可以直接拿去印�
 ## 开发
 
 ```bash
-npm test          # node --test 跑单元与集成测试（361 个用例，约 6s）
+npm test          # node --test 跑单元与集成测试（467 个用例，约 8s）
 npm run bench     # 本地压测跳转 QPS
 npm run icons     # 重新生成图标（需装 @resvg/resvg-js）
 ```

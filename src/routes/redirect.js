@@ -95,23 +95,42 @@ export function createRedirectHandler(ctx) {
     const picked = targets.length ? pickTarget(targets, country) : null;
     const target = picked ? picked.url : link.url;
 
+    /**
+     * 只有 GET 算一次访问。
+     *
+     * HEAD 是链接检查器、邮箱安全扫描、浏览器预取探活用的——它们拿到 302 就走，
+     * 根本没有人在看目标页面。以前这些请求和真人点击一样计进 clicks，
+     * 结果「点击数」里混着一堆机器探活，和来源/时段统计对不上。
+     * 跳转照给，只是不计。
+     */
+    const countable = req.method === 'GET';
     // 延迟计数：只写内存，定时批量落库。
     // 开了去重窗口时，同一 IP 在窗口内反复点同一条只算一次——跳转照旧
-    const duplicate = deduper ? deduper.isDuplicate(link.code, ip, settings.get('dedupeWindowSec')) : false;
-    if (!duplicate) {
+    const duplicate = countable && deduper
+      ? deduper.isDuplicate(link.code, ip, settings.get('dedupeWindowSec'))
+      : false;
+    if (!countable) {
+      // 不计也不进实时流：管理台的「谁在访问」跟着 clicks 口径走，否则两边打架
+    } else if (!duplicate) {
       counter.hit(link.code, { ref, platform, country, targetId: picked?.target?.id });
       record('redirect');
     } else {
       record('deduped');
     }
 
-    ctx.stats.redirects += 1;
+    if (countable) ctx.stats.redirects += 1;
     const status = settings.get('redirectStatus');
     const headers = { 'Cache-Control': 'private, no-store' };
     if (settings.get('blockBots') || botUA) headers['X-Robots-Tag'] = 'noindex, nofollow';
     // 命中分流目标时回一个标记头，排查「为什么跳过去是另一个页面」时不用猜
     if (picked) headers['X-Highurl-Target'] = String(picked.target.id);
-    return redirect(res, appendSuffix(target, code, url), status, headers);
+    // redirect() 本身返回 undefined（res.end() 的返回值没人接），
+    // 直接 `return redirect(...)` 会让外层把这次跳转当成「没处理」，
+    // 继续往下走 404 分支 —— 响应已经发出去了，于是每次正常跳转
+    // 都会在日志里留下一条假的 500 ERR_HTTP_HEADERS_SENT。
+    // 这里必须显式返回「已处理」。
+    redirect(res, appendSuffix(target, code, url), status, headers);
+    return true;
   };
 }
 

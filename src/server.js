@@ -218,7 +218,9 @@ export async function createServer(options = {}) {
         const handled = await handlePasswordSubmit(ctx, req, res, { ...form, code: decodeSafe(first) });
         if (handled) return;
       }
-      if (first && req.method !== 'POST') {
+      // 跳转只接 GET / HEAD。PUT、DELETE、OPTIONS 打到 /<短码> 上没有语义，
+      // 回一个 302 到目标站点既骗了客户端也污染点击统计，让它们落到 404
+      if (first && (req.method === 'GET' || req.method === 'HEAD')) {
         const code = decodeSafe(first);
         const done = await handleRedirect(req, res, code, url);
         if (done === false && req.method === 'GET') {
