@@ -8,7 +8,23 @@
 
 自托管短链接系统 · 零运行时依赖 · 单文件 SQLite · 一个容器就能跑
 
+[![version](https://img.shields.io/badge/version-v1.0.0-8b5cf6)](https://github.com/techjiang/HighURL/releases)
+[![node](https://img.shields.io/badge/node-%E2%89%A522.5-22d3ee)](https://nodejs.org)
+[![deps](https://img.shields.io/badge/runtime%20deps-0-5b8bff)](package.json)
+[![tests](https://img.shields.io/badge/tests-467%20passed-22c55e)](test)
+[![license](https://img.shields.io/badge/license-MIT-8b5cf6)](LICENSE)
+
 </div>
+
+> 作者：科技酱 · 同一个世界，同一个互联网！
+>
+> - 科技酱：<https://www.asoe.cn>
+> - 技术文档（博客）：<https://docs.asoe.cn>
+> - GitHub：<https://github.com/techjiang/>
+> - 哔哩哔哩：<https://space.bilibili.com/1768832152>
+> - 邮箱：official@tech.asoe.cn
+> - 玲珑：<https://forums.asoe.cn/>
+> - QQ 群：291974598 ｜ ② 474819022 ｜ ③ 631167288
 
 ## 看一眼
 
@@ -309,7 +325,7 @@ docker run -d --name highurl \
   -v $(pwd)/data:/data \
   -e HIGHURL_BASE_URL=https://s.example.com \
   --restart unless-stopped \
-  ghcr.io/sleepyheade/highurl:latest
+  ghcr.io/techjiang/highurl:latest
 ```
 
 或者用 compose：
@@ -553,7 +569,8 @@ Logo 源文件在 `assets/`，都是纯 SVG、透明底，可以直接拿去印�
 
 ## 部署
 
-- [部署指南](docs/deploy.md)：systemd、Docker、Nginx / Caddy 反代
+- [更新日志](CHANGELOG.md)：v1.0.0 做了什么、开发期版本对照
+- [部署指南](docs/deploy.md)：systemd、Docker、Nginx / Caddy 反代、跨版本升级
 - [架构说明](docs/architecture.md)：请求链路、计数落库、缓存、安全设计
 - [备份与迁移](docs/backup.md)：备份策略、异地迁移、灾难恢复
 

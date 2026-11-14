@@ -15,7 +15,7 @@ node src/cli.js doctor
 ## 方式一：直接运行
 
 ```bash
-git clone https://cnb.cool/sleepyheade/HighURL.git
+git clone https://github.com/techjiang/HighURL.git
 cd HighURL
 node src/cli.js serve --port 8080 --data /var/lib/highurl
 ```
@@ -73,7 +73,7 @@ docker run -d --name highurl \
   -e HIGHURL_BASE_URL=https://s.example.com \
   -e HIGHURL_TRUST_PROXY=true \
   --restart unless-stopped \
-  ghcr.io/sleepyheade/highurl:latest
+  ghcr.io/techjiang/highurl:latest
 ```
 
 镜像基于 `node:22-alpine`，非 root 用户运行，`/data` 是唯一需要持久化的卷。
@@ -176,6 +176,43 @@ curl -s https://s.example.com/metrics  # Prometheus 文本格式
 - `highurl_requests_total` / `highurl_process_uptime_seconds`
 
 `clicks_pending` 持续增长说明 flush 在失败，看日志里的 `[counter] flush failed`。
+
+## 升级
+
+### 从 v1.0.0 开始
+
+v1.0.0 就是第一个正式版本，之后再升级都是小版本内的事：
+
+```bash
+cd /opt/highurl
+git fetch --tags && git checkout v1.0.1   # 换成目标版本
+systemctl restart highurl
+```
+
+进程启动时会自动跑数据库迁移，**不需要手动执行 SQL**，也不会动已有数据。
+
+### 从开发期版本（v1.14 – v1.21）升到 v1.0.0
+
+v1.14 到 v1.21 是开发期版本号，v1.0.0 是它们合并后的第一个发布版。库里可能是 schema v9 – v13 中的任一版本，升级到 v1.0.0（schema v13）时：
+
+1. **先备份**，两条命令都要跑：
+   ```bash
+   systemctl stop highurl
+   node src/cli.js backup /backup/before-v1.0.0.json
+   node src/cli.js verify /backup/before-v1.0.0.json
+   ```
+2. 换代码、启动。启动日志里会看到 `schema 9 → 13` 这类迁移记录，逐版本往上走。
+3. 起来后核对三件事：
+   - `node src/cli.js stats` 的短链数与点击数
+   - 管理台能打开，短链列表里的分组、标签、有效期都在
+   - 随便挑一条链访问，302 正常、`/health` 的 `requests.errors` 不涨
+4. 有问题就停服务，用 `node src/cli.js restore /backup/before-v1.0.0.json --replace --yes` 回到升级前。
+
+跨版本升级不会补历史数据：`click_slots`（星期×小时）和 `landing_views`（建页曝光）都是后加的表，升级前没有记过就是没有，界面上显示「没数据」而不是 0。
+
+### 从 YOURLS 迁过来
+
+见 [migrate-yourls.md](migrate-yourls.md)，短码和点击数原样保留。
 
 ## 排错
 

@@ -1,7 +1,7 @@
 services:
   highurl:
     build: .
-    image: ghcr.io/sleepyheade/highurl:latest
+    image: ghcr.io/techjiang/highurl:latest
     container_name: highurl
     restart: unless-stopped
     ports:

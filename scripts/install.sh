@@ -94,7 +94,7 @@ if [[ $INSTALL_SERVICE -eq 1 ]]; then
   cat > /etc/systemd/system/highurl.service <<UNIT
 [Unit]
 Description=HighURL 短链接服务
-Documentation=https://cnb.cool/sleepyheade/HighURL
+Documentation=https://github.com/techjiang/HighURL
 After=network-online.target
 Wants=network-online.target
 
